@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Facades\Cache;
 use Godrade\LaravelBan\Events\UserBanned;
 use Godrade\LaravelBan\Events\UserUnbanned;
+use Godrade\LaravelBan\Exceptions\AlreadyBannedException;
 use Godrade\LaravelBan\Models\Ban;
 
 /**
@@ -46,18 +47,30 @@ trait HasBans
      */
     public function ban(array $attributes = []): Ban
     {
+        $feature   = $attributes['feature'] ?? null;
         $createdBy = $attributes['created_by'] ?? null;
+
+        if (! config('ban.allow_overlapping_bans', false)) {
+            $existing = $this->bans()
+                ->active()
+                ->where('feature', $feature)
+                ->first();
+
+            if ($existing !== null) {
+                throw new AlreadyBannedException($existing);
+            }
+        }
 
         /** @var Ban $ban */
         $ban = $this->bans()->create([
-            'feature' => $attributes['feature'] ?? null,
-            'reason' => $attributes['reason'] ?? null,
-            'expired_at' => $attributes['expired_at'] ?? null,
+            'feature'         => $feature,
+            'reason'          => $attributes['reason'] ?? null,
+            'expired_at'      => $attributes['expired_at'] ?? null,
             'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
-            'created_by_id' => $createdBy?->getKey(),
+            'created_by_id'   => $createdBy?->getKey(),
         ]);
 
-        $this->flushBanCache($attributes['feature'] ?? null);
+        $this->flushBanCache($feature);
 
         event(new UserBanned($this, $ban));
 
@@ -115,7 +128,7 @@ trait HasBans
     // Cache Helpers
     // -------------------------------------------------------------------------
 
-    private function cachedBanCheck(?string $feature, \Closure $callback): string
+    private function cachedBanCheck(?string $feature, \Closure $callback): bool
     {
         $ttl = (int)config('ban.cache_ttl', 3600);
 

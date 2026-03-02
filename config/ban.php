@@ -64,6 +64,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Allow Overlapping Bans
+    |--------------------------------------------------------------------------
+    | When set to false (recommended), calling ban() on a model that already
+    | has an active ban (globally or on the same feature) will throw a
+    | Godrade\LaravelBan\Exceptions\AlreadyBannedException instead of creating
+    | a duplicate ban record.
+    |
+    | Set to true to allow stacking multiple active bans on the same model /
+    | feature (legacy behaviour).
+    */
+    'allow_overlapping_bans' => (bool) env('BAN_ALLOW_OVERLAPPING', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Soft-Delete Bans
     |--------------------------------------------------------------------------
     | When enabled, ban records are soft-deleted instead of permanently removed.
