@@ -1,0 +1,52 @@
+{
+    "name": "godrade/laravel-ban",
+    "description": "A complete, performant and highly configurable ban package for Laravel.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "ban", "user-ban", "ip-ban", "middleware"],
+    "authors": [
+        {
+            "name": "Godrade",
+            "role": "Developer",
+            "email": "contact@balmcore.fr"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^10.0|^11.0",
+        "illuminate/database": "^10.0|^11.0",
+        "illuminate/cache": "^10.0|^11.0",
+        "illuminate/console": "^10.0|^11.0",
+        "illuminate/http": "^10.0|^11.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0",
+        "pestphp/pest": "^2.0",
+        "pestphp/pest-plugin-laravel": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Godrade\\LaravelBan\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Godrade\\LaravelBan\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Godrade\\LaravelBan\\BanServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

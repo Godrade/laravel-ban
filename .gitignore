@@ -1,1 +1,17 @@
 .idea
+/vendor
+/node_modules
+/.vscode
+/.env
+/.env.local
+/.env.development
+/.env.test
+/.env.production
+.DS_Store
+composer.lock
+*.log
+*.cache
+*.tmp
+dist
+build
+coverage

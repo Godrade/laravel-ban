@@ -1,0 +1,84 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Godrade\LaravelBan\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Carbon;
+
+/**
+ * @property int                  $id
+ * @property string               $bannable_type
+ * @property int                  $bannable_id
+ * @property string|null          $feature
+ * @property string|null          $reason
+ * @property Carbon|null          $expired_at
+ * @property Carbon               $created_at
+ * @property Carbon               $updated_at
+ * @property Carbon|null          $deleted_at
+ *
+ * @method static Builder active()
+ * @method static Builder forFeature(string $feature)
+ * @method static Builder global()
+ */
+final class Ban extends Model
+{
+    use SoftDeletes;
+
+    protected $guarded = [];
+
+    protected function casts(): array
+    {
+        return [
+            'expired_at' => 'datetime',
+        ];
+    }
+
+    public function getTable(): string
+    {
+        return config('ban.table_names.bans', 'bans');
+    }
+
+    /** The model that is banned. */
+    public function bannable(): MorphTo
+    {
+        return $this->morphTo();
+    }
+
+    /** The model that created the ban (e.g. an admin). */
+    public function createdBy(): MorphTo
+    {
+        return $this->morphTo('created_by');
+    }
+
+    /** Whether this ban has not yet expired. */
+    public function isActive(): bool
+    {
+        return $this->expired_at === null || $this->expired_at->isFuture();
+    }
+
+    /** Scope: only bans that are currently active. */
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where(function (Builder $q): void {
+            $q->whereNull('expired_at')
+              ->orWhere('expired_at', '>', now());
+        });
+    }
+
+    /** Scope: bans tied to a specific feature. */
+    public function scopeForFeature(Builder $query, string $feature): Builder
+    {
+        return $query->where('feature', $feature);
+    }
+
+    /** Scope: global bans (no feature restriction). */
+    public function scopeGlobal(Builder $query): Builder
+    {
+        return $query->whereNull('feature');
+    }
+}
