@@ -10,6 +10,7 @@ use Illuminate\Support\ServiceProvider;
 use Godrade\LaravelBan\Blade\BanDirectives;
 use Godrade\LaravelBan\Console\Commands\BanConfigCommand;
 use Godrade\LaravelBan\Console\Commands\BanUserCommand;
+use Godrade\LaravelBan\Middleware\BlockBannedIp;
 use Godrade\LaravelBan\Middleware\CheckBanned;
 use Godrade\LaravelBan\Models\Ban;
 
@@ -75,6 +76,7 @@ final class BanServiceProvider extends ServiceProvider
         $alias = config('ban.middleware_alias', 'banned');
 
         $router->aliasMiddleware($alias, CheckBanned::class);
+        $router->aliasMiddleware('ban.ip', BlockBannedIp::class);
     }
 
     private function bootBladeDirectives(): void
