@@ -21,6 +21,9 @@ return new class extends Migration
             // Optional: who created the ban (polymorphic to support any admin model)
             $table->nullableMorphs('created_by');
 
+            // Optional: the cause / trigger of the ban (report, ticket, rule…)
+            $table->nullableMorphs('cause');
+
             // Scoped ban: null means global, a string limits the ban to one feature
             $table->string('feature')->nullable()->index();
 

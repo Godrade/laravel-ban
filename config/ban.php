@@ -30,7 +30,7 @@ return [
     | How long (in seconds) ban status is cached. Set to 0 to disable caching.
     | Default: 3600 (1 hour).
     */
-    'cache_ttl' => (int) env('BAN_CACHE_TTL', 3600),
+    'cache_ttl' => (int)env('BAN_CACHE_TTL', 3600),
 
     /*
     |--------------------------------------------------------------------------
@@ -48,7 +48,7 @@ return [
     | Customize the database table names used by this package.
     */
     'table_names' => [
-        'bans'       => 'bans',
+        'bans' => 'bans',
         'banned_ips' => 'banned_ips',
     ],
 
@@ -74,7 +74,34 @@ return [
     | Set to true to allow stacking multiple active bans on the same model /
     | feature (legacy behaviour).
     */
-    'allow_overlapping_bans' => (bool) env('BAN_ALLOW_OVERLAPPING', false),
+    'allow_overlapping_bans' => (bool)env('BAN_ALLOW_OVERLAPPING', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Dynamic Relations
+    |--------------------------------------------------------------------------
+    | Register additional Eloquent relations on the Ban model at boot time.
+    | Each entry must follow the shape:
+    |
+    |   'relation_name' => [
+    |       'type'        => 'belongsTo',           // Eloquent relation method name
+    |       'related' => App\Models\Preset::class,
+    |       'foreign_key' => 'preset_id',           // optional
+    |       'owner_key'   => 'id',                  // optional (belongsTo only)
+    | ]
+    |
+    | Names listed in reserved_relations cannot be overridden.
+    */
+    'relations' => [
+        // Example:
+        // 'preset' => [
+        //     'type'        => 'belongsTo',
+        //     'related'     => \App\Models\Preset::class,
+        //     'foreign_key' => 'preset_id',
+        // ],
+    ],
+
+    'reserved_relations' => ['bannable', 'createdBy', 'cause'],
 
     /*
     |--------------------------------------------------------------------------

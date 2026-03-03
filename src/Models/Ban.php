@@ -14,6 +14,10 @@ use Illuminate\Support\Carbon;
  * @property int                  $id
  * @property string               $bannable_type
  * @property int                  $bannable_id
+ * @property string|null          $created_by_type
+ * @property int|null             $created_by_id
+ * @property string|null          $cause_type
+ * @property int|null             $cause_id
  * @property string|null          $feature
  * @property string|null          $reason
  * @property Carbon|null          $expired_at
@@ -53,6 +57,12 @@ final class Ban extends Model
     public function createdBy(): MorphTo
     {
         return $this->morphTo('created_by');
+    }
+
+    /** The polymorphic cause of this ban (e.g. a Report, Ticket or ModerationRule). */
+    public function cause(): MorphTo
+    {
+        return $this->morphTo('cause');
     }
 
     /** Whether this ban has not yet expired. */
