@@ -5,52 +5,79 @@ declare(strict_types=1);
 namespace Godrade\LaravelBan\Blade;
 
 use Illuminate\Support\Facades\Auth;
+use Illuminate\View\Compilers\BladeCompiler;
+use Godrade\LaravelBan\Models\BannedIp;
 use Godrade\LaravelBan\Traits\HasBans;
 
 final class BanDirectives
 {
-    public function register(\Illuminate\View\Compilers\BladeCompiler $blade): void
+    /** Per-request memoization cache for IP ban lookups. */
+    private static array $ipCache = [];
+
+    public function register(BladeCompiler $blade): void
     {
-        // @banned ... @endbanned
-        $blade->if('banned', function (): bool {
-            return $this->currentUserIsBanned();
+        // @banned($model = null) ... @endbanned
+        $blade->if('banned', function (mixed $model = null): bool {
+            return $this->resolveModel($model)?->isBanned() ?? false;
         });
 
-        // @notBanned ... @endnotBanned
-        $blade->if('notBanned', function (): bool {
-            return ! $this->currentUserIsBanned();
+        // @notBanned($model = null) ... @endnotBanned
+        $blade->if('notBanned', function (mixed $model = null): bool {
+            return ! ($this->resolveModel($model)?->isBanned() ?? false);
         });
 
-        // @bannedFrom('feature') ... @endbannedFrom
-        $blade->if('bannedFrom', function (string $feature): bool {
-            return $this->currentUserIsBannedFrom($feature);
+        // @bannedFrom($feature, $model = null) ... @endbannedFrom
+        $blade->if('bannedFrom', function (string $feature, mixed $model = null): bool {
+            return $this->resolveModel($model)?->isBannedFrom($feature) ?? false;
+        });
+
+        // @bannedIp($ip = null, $feature = null) ... @endbannedIp
+        $blade->if('bannedIp', function (?string $ip = null, ?string $feature = null): bool {
+            return $this->resolveIpBan($ip, $feature);
         });
     }
 
-    private function currentUserIsBanned(): bool
+    /** Flush the static IP cache (required for Laravel Octane). */
+    public static function flushIpCache(): void
     {
-        $user = Auth::user();
+        self::$ipCache = [];
+    }
 
-        if ($user === null || ! $this->usesTrait($user)) {
-            return false;
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private function resolveModel(mixed $model): mixed
+    {
+        $target = $model ?? Auth::user();
+
+        if ($target === null || ! $this->usesTrait($target)) {
+            return null;
         }
 
-        return $user->isBanned();
+        return $target;
     }
 
-    private function currentUserIsBannedFrom(string $feature): bool
+    private function resolveIpBan(?string $ip, ?string $feature): bool
     {
-        $user = Auth::user();
+        $ip ??= request()->ip() ?? '';
+        $cacheKey = $ip . ':' . ($feature ?? '');
 
-        if ($user === null || ! $this->usesTrait($user)) {
-            return false;
+        if (array_key_exists($cacheKey, self::$ipCache)) {
+            return self::$ipCache[$cacheKey];
         }
 
-        return $user->isBannedFrom($feature);
+        $query = BannedIp::active()->forIp($ip);
+
+        if ($feature !== null) {
+            $query->forFeature($feature);
+        }
+
+        return self::$ipCache[$cacheKey] = $query->exists();
     }
 
-    private function usesTrait(mixed $user): bool
+    private function usesTrait(mixed $model): bool
     {
-        return in_array(HasBans::class, class_uses_recursive($user), strict: true);
+        return in_array(HasBans::class, class_uses_recursive($model), strict: true);
     }
 }

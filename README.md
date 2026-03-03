@@ -22,6 +22,9 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
   - [CheckBanned](#checkbanned)
   - [BlockBannedIp](#blockbannedip)
 - [Directives Blade](#directives-blade)
+  - [@banned / @notBanned](#banned--notbanned)
+  - [@bannedFrom](#bannedfrom)
+  - [@bannedIp](#bannedip)
 - [Intégration Livewire](#intégration-livewire)
   - [Attribut #\[LockedByBan\]](#attribut-lockedbyban)
   - [Trait InterceptsBans](#trait-interceptsbans)
@@ -421,11 +424,17 @@ $this->app->make(\Illuminate\Contracts\Http\Kernel::class)
 
 ## Directives Blade
 
+Toutes les directives acceptent un modèle optionnel. Si omis, l'utilisateur connecté (`auth()->user()`) est utilisé.
+
 ### `@banned` / `@notBanned`
 
-Affiche un bloc selon que l'utilisateur connecté est banni globalement ou non.
+```
+@banned($model = null)
+@notBanned($model = null)
+```
 
 ```blade
+{{-- Utilisateur connecté --}}
 @banned
     <p class="text-red-500">Votre compte est suspendu.</p>
 @endbanned
@@ -433,13 +442,21 @@ Affiche un bloc selon que l'utilisateur connecté est banni globalement ou non.
 @notBanned
     <a href="/post">Créer un article</a>
 @endnotBanned
+
+{{-- Modèle arbitraire --}}
+@banned($shop)
+    <p>Cette boutique est suspendue.</p>
+@endbanned
 ```
 
 ### `@bannedFrom`
 
-Affiche un bloc si l'utilisateur est banni d'une feature spécifique.
+```
+@bannedFrom($feature, $model = null)
+```
 
 ```blade
+{{-- Utilisateur connecté --}}
 @bannedFrom('comments')
     <p>Vous ne pouvez pas commenter pour le moment.</p>
 @else
@@ -447,6 +464,45 @@ Affiche un bloc si l'utilisateur est banni d'une feature spécifique.
         {{-- formulaire de commentaire --}}
     </form>
 @endbannedFrom
+
+{{-- Modèle arbitraire --}}
+@bannedFrom('api', $apiUser)
+    <p>Cet utilisateur est banni de l'API.</p>
+@endbannedFrom
+```
+
+### `@bannedIp`
+
+Vérifie si l'adresse IP courante (ou une IP explicite) est bannie.
+
+```
+@bannedIp($ip = null, $feature = null)
+```
+
+```blade
+{{-- IP de la requête courante --}}
+@bannedIp
+    <p class="text-red-500">Votre adresse IP est bloquée.</p>
+@endbannedIp
+
+{{-- Feature-scoped --}}
+@bannedIp(null, 'api')
+    <p>Votre IP est bloquée pour l'accès à l'API.</p>
+@endbannedIp
+
+{{-- IP explicite --}}
+@bannedIp('1.2.3.4')
+    <p>Cette adresse IP est bannie.</p>
+@endbannedIp
+```
+
+> **Performance :** le résultat de chaque combinaison `{ip}:{feature}` est mémoïsé pour la durée de la requête. Une seule requête SQL est exécutée par IP/feature, même si la directive est utilisée plusieurs fois dans la même vue.
+
+#### Reset du cache IP (Laravel Octane)
+
+```php
+// AppServiceProvider::boot()
+\Godrade\LaravelBan\Blade\BanDirectives::flushIpCache();
 ```
 
 ---
