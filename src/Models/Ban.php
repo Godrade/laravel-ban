@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Godrade\LaravelBan\Models;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -31,7 +32,7 @@ use Illuminate\Support\Carbon;
  */
 final class Ban extends Model
 {
-    use SoftDeletes;
+    use MassPrunable, SoftDeletes;
 
     protected $guarded = [];
 
@@ -69,6 +70,16 @@ final class Ban extends Model
     public function isActive(): bool
     {
         return $this->expired_at === null || $this->expired_at->isFuture();
+    }
+
+    /**
+     * Prunable query: permanently remove expired bans older than 30 days.
+     * Run via: php artisan model:prune --model="Godrade\LaravelBan\Models\Ban"
+     * Or schedule: $schedule->command('model:prune')->daily();
+     */
+    public function prunable(): Builder
+    {
+        return static::where('expired_at', '<', now()->subDays(30));
     }
 
     /** Scope: only bans that are currently active. */

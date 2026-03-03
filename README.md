@@ -17,6 +17,7 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
   - [Protection contre les bans en doublon](#protection-contre-les-bans-en-doublon)
   - [Vérifier un ban](#vérifier-un-ban)
   - [Bans par feature (scope)](#bans-par-feature-scope)
+  - [syncBan — upsert idempotent](#syncban--upsert-idempotent)
 - [Middleware](#middleware)
   - [CheckBanned](#checkbanned)
   - [BlockBannedIp](#blockbannedip)
@@ -25,10 +26,15 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
   - [Attribut #\[LockedByBan\]](#attribut-lockedbyban)
   - [Trait InterceptsBans](#trait-interceptsbans)
 - [Commandes Artisan](#commandes-artisan)
+  - [ban:user](#banuser)
+  - [ban:config](#banconfig)
+  - [ban:list](#banlist)
+  - [ban:remove](#banremove)
 - [Événements](#événements)
 - [Cache multi-driver](#cache-multi-driver)
 - [Modèles Eloquent](#modèles-eloquent)
   - [Ban](#ban)
+  - [Pruning automatique](#pruning-automatique)
   - [Relation cause (polymorphique)](#relation-cause-polymorphique)
   - [Relations dynamiques](#relations-dynamiques)
   - [BannedIp](#bannedip)
@@ -279,6 +285,30 @@ $user->isBanned();               // false (pas de ban global)
 // Débannir uniquement du forum
 $user->unban('forum');
 ```
+
+---
+
+### syncBan — upsert idempotent
+
+`syncBan()` est une alternative à `ban()` qui **ne lève jamais `AlreadyBannedException`**. Elle met à jour le ban actif existant sur le même scope ou en crée un nouveau, ce qui la rend parfaite pour les tâches planifiées, les webhooks et les imports.
+
+```php
+// Crée un ban si aucun ban actif n'existe
+$user->syncBan(['reason' => 'Violation CGU', 'expired_at' => now()->addDays(7)]);
+
+// Met à jour le ban actif existant (même scope global)
+$user->syncBan(['reason' => 'Récidive', 'expired_at' => now()->addDays(30)]);
+
+// Feature-scoped — indépendant du scope global
+$user->syncBan(['feature' => 'comments', 'reason' => 'Commentaires offensants']);
+```
+
+| Situation | Comportement |
+|---|---|
+| Aucun ban actif sur ce scope | Crée un nouveau ban + dispatche `UserBanned` |
+| Ban actif existant sur ce scope | Met à jour `reason`, `expired_at`, `created_by` |
+| Ban expiré sur ce scope | Crée un nouveau ban |
+| `allow_overlapping_bans` peu importe | Jamais d'`AlreadyBannedException` |
 
 ---
 
@@ -586,7 +616,62 @@ php artisan ban:config --migrations
 
 ---
 
-## Événements
+### `ban:list`
+
+Affiche un tableau de tous les bans enregistrés.
+
+```bash
+# Tous les bans actifs
+php artisan ban:list
+
+# Filtrés par feature
+php artisan ban:list --feature=comments
+
+# Inclure aussi les bans expirés
+php artisan ban:list --expired
+
+# Filtrés par type de modèle
+php artisan ban:list --model="App\Models\User"
+```
+
+**Options :**
+
+| Option | Description |
+|---|---|
+| `--feature=` | Filtre par feature (scope) |
+| `--expired` | Inclut les bans expirés dans le résultat |
+| `--model=` | Filtre par classe Eloquent bannable |
+
+**Colonnes affichées :** `ID · Bannable Type · Bannable ID · Feature · Reason · Expires at · Created at`
+
+---
+
+### `ban:remove`
+
+Supprime un ban par son identifiant technique.
+
+```bash
+# Soft-delete avec confirmation interactive
+php artisan ban:remove 42
+
+# Suppression permanente (force)
+php artisan ban:remove 42 --force
+
+# Skip la confirmation (scripts CI/CD)
+php artisan ban:remove 42 --no-confirm
+```
+
+**Options :**
+
+| Option | Description |
+|---|---|
+| `id` | *(requis)* Identifiant du ban |
+| `--force` | Suppression permanente (ignore le soft-delete) |
+| `--no-confirm` | Ne demande pas de confirmation |
+
+Le cache du modèle banni est **automatiquement invalidé** après la suppression.
+
+---
 
 | Événement | Déclenché quand |
 |---|---|
@@ -672,7 +757,26 @@ $ban->isActive(); // bool
 
 ---
 
-### Relation `cause` (polymorphique)
+### Pruning automatique
+
+Le modèle `Ban` implémente `MassPrunable` : les bans expirés depuis plus de **30 jours** peuvent être supprimés en une seule commande SQL.
+
+```bash
+php artisan model:prune --model="Godrade\LaravelBan\Models\Ban"
+```
+
+**Planifier le nettoyage** dans `app/Console/Kernel.php` :
+
+```php
+protected function schedule(Schedule $schedule): void
+{
+    $schedule->command('model:prune')->daily();
+}
+```
+
+> Seuls les bans avec `expired_at < now()->subDays(30)` sont ciblés. Les bans permanents (`expired_at = null`) et les bans récemment expirés sont préservés.
+
+---
 
 La relation `cause` lie un ban à **n'importe quel modèle déclencheur** (signalement, ticket de support, règle de modération…).
 
@@ -760,6 +864,7 @@ BannedIp::active()->forIp($request->ip())->forFeature('api')->exists();
 |---|---|
 | `tests/Feature/DynamicRelationsTest.php` | Relations dynamiques, noms réservés, relation `cause` |
 | `tests/Feature/InterceptsBansTest.php` | `#[LockedByBan]` méthode / classe / feature, `BlockBannedIp`, mémoïsation |
+| `tests/Feature/MaintenanceTest.php` | `ban:list`, `ban:remove`, `syncBan()`, `MassPrunable` |
 
 ---
 

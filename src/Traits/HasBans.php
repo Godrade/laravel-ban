@@ -78,6 +78,56 @@ trait HasBans
     }
 
     /**
+     * Synchronize the active ban for this model on the given scope.
+     *
+     * - If an active ban already exists on the same feature, it is **updated**
+     *   in place (reason, expired_at, created_by).
+     * - If no active ban exists, a new one is **created**.
+     *
+     * Unlike ban(), this method never throws AlreadyBannedException, making it
+     * safe for idempotent operations (e.g. API upserts, scheduled tasks).
+     *
+     * @param array{
+     *     reason?: string|null,
+     *     expired_at?: \DateTimeInterface|string|null,
+     *     feature?: string|null,
+     *     created_by?: \Illuminate\Database\Eloquent\Model|null,
+     * } $attributes
+     */
+    public function syncBan(array $attributes = []): Ban
+    {
+        $feature   = $attributes['feature'] ?? null;
+        $createdBy = $attributes['created_by'] ?? null;
+
+        $payload = [
+            'reason'          => $attributes['reason'] ?? null,
+            'expired_at'      => $attributes['expired_at'] ?? null,
+            'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
+            'created_by_id'   => $createdBy?->getKey(),
+        ];
+
+        /** @var Ban|null $existing */
+        $existing = $this->bans()
+            ->active()
+            ->where('feature', $feature)
+            ->first();
+
+        if ($existing !== null) {
+            $existing->update($payload);
+            $existing->refresh();
+            $ban = $existing;
+        } else {
+            /** @var Ban $ban */
+            $ban = $this->bans()->create(array_merge($payload, ['feature' => $feature]));
+            event(new UserBanned($this, $ban));
+        }
+
+        $this->flushBanCache($feature);
+
+        return $ban;
+    }
+
+    /**
      * Remove active bans. Pass a feature to target only that scope,
      * or null to remove all global bans.
      */

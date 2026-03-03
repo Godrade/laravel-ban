@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use Godrade\LaravelBan\Blade\BanDirectives;
 use Godrade\LaravelBan\Console\Commands\BanConfigCommand;
+use Godrade\LaravelBan\Console\Commands\BanListCommand;
+use Godrade\LaravelBan\Console\Commands\BanRemoveCommand;
 use Godrade\LaravelBan\Console\Commands\BanUserCommand;
 use Godrade\LaravelBan\Middleware\BlockBannedIp;
 use Godrade\LaravelBan\Middleware\CheckBanned;
@@ -95,6 +97,8 @@ final class BanServiceProvider extends ServiceProvider
         $this->commands([
             BanUserCommand::class,
             BanConfigCommand::class,
+            BanListCommand::class,
+            BanRemoveCommand::class,
         ]);
     }
 
