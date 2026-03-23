@@ -40,13 +40,10 @@ final class Ban extends Model
 
     protected $guarded = [];
 
-    protected function casts(): array
-    {
-        return [
-            'status'     => BanStatus::class,
-            'expired_at' => 'datetime',
-        ];
-    }
+    protected $casts = [
+        'status'     => BanStatus::class,
+        'expired_at' => 'datetime',
+    ];
 
     public function getTable(): string
     {

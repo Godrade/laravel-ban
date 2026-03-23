@@ -31,12 +31,9 @@ final class BannedIp extends Model
 
     protected $guarded = [];
 
-    protected function casts(): array
-    {
-        return [
-            'expired_at' => 'datetime',
-        ];
-    }
+    protected $casts = [
+        'expired_at' => 'datetime',
+    ];
 
     public function getTable(): string
     {
