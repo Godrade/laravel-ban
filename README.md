@@ -2,7 +2,7 @@
 
 Un package Laravel complet, performant et hautement configurable pour gérer les bans d'utilisateurs et d'adresses IP.
 
-**Compatibilité :** PHP 8.2+ · Laravel 10 / 11 / 12 · PSR-4 · TALL Stack ready
+**Compatibilité :** PHP 8.2+ · Laravel 11 / 12 · PSR-4 · TALL Stack ready
 
 ---
 
