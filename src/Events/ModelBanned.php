@@ -13,8 +13,12 @@ final class ModelBanned
 {
     use Dispatchable, SerializesModels;
 
+    public readonly ?string $feature;
+
     public function __construct(
         public readonly Bannable $bannable,
         public readonly Ban $ban,
-    ) {}
+    ) {
+        $this->feature = $ban->feature;
+    }
 }

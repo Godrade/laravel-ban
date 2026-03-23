@@ -29,6 +29,7 @@ use Godrade\LaravelBan\Enums\BanStatus;
  * @property Carbon|null          $deleted_at
  *
  * @method static Builder active()
+ * @method static Builder cancelled()
  * @method static Builder withStatus(string|\UnitEnum $status)
  * @method static Builder forFeature(string $feature)
  * @method static Builder global()
@@ -96,6 +97,12 @@ final class Ban extends Model
                 $q->whereNull('expired_at')
                   ->orWhere('expired_at', '>', now());
             });
+    }
+
+    /** Scope: only bans that have been manually cancelled via unban(). */
+    public function scopeCancelled(Builder $query): Builder
+    {
+        return $query->where('status', BanStatus::CANCELLED->value);
     }
 
     /** Scope: filter by an arbitrary status value or BanStatus enum case. */

@@ -46,6 +46,9 @@ trait HasBans
     /**
      * Ban this model.
      *
+     * Returns the created {@see Ban} instance, or `null` if a recursive call
+     * was detected (the static lock was already held for this instance).
+     *
      * @param array{
      *     reason?: string|null,
      *     expired_at?: DateTimeInterface|string|null,
@@ -53,13 +56,12 @@ trait HasBans
      *     created_by?: Model|null,
      * } $attributes
      */
-    public function ban(array $attributes = []): Ban
+    public function ban(array $attributes = []): ?Ban
     {
         $lock = spl_object_hash($this);
 
         if (isset(self::$executingBans[$lock])) {
-            // @phpstan-ignore-next-line — intentional guard; caller must handle null
-            return new Ban();
+            return null;
         }
 
         self::$executingBans[$lock] = true;
@@ -107,6 +109,9 @@ trait HasBans
      *
      * Unlike ban(), this method never throws AlreadyBannedException.
      *
+     * Returns the created or updated {@see Ban} instance, or `null` if a
+     * recursive call was detected (the static lock was already held for this instance).
+     *
      * @param array{
      *     reason?: string|null,
      *     expired_at?: \DateTimeInterface|string|null,
@@ -114,13 +119,12 @@ trait HasBans
      *     created_by?: \Illuminate\Database\Eloquent\Model|null,
      * } $attributes
      */
-    public function syncBan(array $attributes = []): Ban
+    public function syncBan(array $attributes = []): ?Ban
     {
         $lock = spl_object_hash($this);
 
         if (isset(self::$executingBans[$lock])) {
-            // @phpstan-ignore-next-line
-            return new Ban();
+            return null;
         }
 
         self::$executingBans[$lock] = true;
@@ -244,7 +248,7 @@ trait HasBans
         );
     }
 
-    private function flushBanCache(?string $feature): void
+    public function flushBanCache(?string $feature): void
     {
         $ttl = (int)config('ban.cache_ttl', 3600);
 

@@ -19,7 +19,7 @@ return new class extends Migration
             $table->string('ip_address', 45)->unique()->index();
 
             // Scoped ban: null means all features, a string limits to one feature
-            $table->string('feature')->nullable()->index();
+            $table->string('feature', 50)->nullable()->index();
 
             $table->text('reason')->nullable();
 

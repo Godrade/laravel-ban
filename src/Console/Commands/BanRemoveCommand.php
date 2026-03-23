@@ -95,7 +95,7 @@ final class BanRemoveCommand extends Command
             }
 
             $bannable = $class::find($ban->bannable_id);
-            $bannable?->unban($ban->feature); // triggers flushBanCache internally
+            $bannable?->flushBanCache($ban->feature); // flush cache without side effects
         } catch (\Throwable) {
             // Non-critical: cache will expire naturally
         }

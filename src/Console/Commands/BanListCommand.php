@@ -15,7 +15,8 @@ final class BanListCommand extends Command
     protected $signature = 'ban:list
         {--feature=     : Filter by feature scope (omit for all bans)}
         {--expired      : Include expired bans (default: active only)}
-        {--model=       : Filter by bannable model class (e.g. App\\Models\\User)}';
+        {--model=       : Filter by bannable model class (e.g. App\\Models\\User)}
+        {--status=      : Filter by status (active, cancelled)}';
 
     /**
      * @var string
@@ -43,6 +44,12 @@ final class BanListCommand extends Command
             $query->where('bannable_type', $model);
         }
 
+        // Optional status filter
+        $status = $this->option('status') ?: null;
+        if ($status !== null) {
+            $query->withStatus($status);
+        }
+
         $bans = $query->get();
 
         if ($bans->isEmpty()) {
@@ -51,23 +58,25 @@ final class BanListCommand extends Command
         }
 
         $this->table(
-            ['ID', 'Bannable Type', 'Bannable ID', 'Feature', 'Reason', 'Expires at', 'Created at'],
+            ['ID', 'Bannable Type', 'Bannable ID', 'Feature', 'Reason', 'Status', 'Expires at', 'Created at'],
             $bans->map(fn (Ban $ban) => [
                 $ban->id,
                 $ban->bannable_type,
                 $ban->bannable_id,
                 $ban->feature    ?? '—',
                 $this->truncate($ban->reason ?? '—', 40),
+                $ban->status->value,
                 $ban->expired_at?->toDateTimeString() ?? 'permanent',
                 $ban->created_at->toDateTimeString(),
             ])->all(),
         );
 
         $this->line(sprintf(
-            '<fg=gray>%d ban(s) shown%s%s.</>',
+            '<fg=gray>%d ban(s) shown%s%s%s.</>',
             $bans->count(),
             $feature !== null ? " · feature={$feature}" : '',
             $this->option('expired') ? ' · including expired' : ' · active only',
+            $status !== null ? " · status={$status}" : '',
         ));
 
         return self::SUCCESS;

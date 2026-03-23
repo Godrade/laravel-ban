@@ -18,6 +18,9 @@ interface Bannable
     /**
      * Ban this model, optionally scoped to a feature.
      *
+     * Returns the created {@see Ban} instance, or `null` if a recursive call
+     * was detected (the static lock was already held for this instance).
+     *
      * @param  array{
      *     reason?: string|null,
      *     expired_at?: \DateTimeInterface|string|null,
@@ -25,7 +28,22 @@ interface Bannable
      *     created_by?: Model|null,
      * } $attributes
      */
-    public function ban(array $attributes = []): Ban;
+    public function ban(array $attributes = []): ?Ban;
+
+    /**
+     * Synchronize the active ban for this model on the given scope.
+     *
+     * Returns the created or updated {@see Ban} instance, or `null` if a
+     * recursive call was detected (the static lock was already held for this instance).
+     *
+     * @param  array{
+     *     reason?: string|null,
+     *     expired_at?: \DateTimeInterface|string|null,
+     *     feature?: string|null,
+     *     created_by?: Model|null,
+     * } $attributes
+     */
+    public function syncBan(array $attributes = []): ?Ban;
 
     /**
      * Remove all active bans, optionally scoped to a feature.

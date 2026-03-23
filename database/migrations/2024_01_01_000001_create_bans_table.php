@@ -25,7 +25,7 @@ return new class extends Migration
             $table->nullableMorphs('cause');
 
             // Scoped ban: null means global, a string limits the ban to one feature
-            $table->string('feature')->nullable()->index();
+            $table->string('feature', 50)->nullable()->index();
 
             // Human-readable reason for the ban
             $table->text('reason')->nullable();

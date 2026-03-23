@@ -197,14 +197,15 @@ $user->ban([
 ]);
 ```
 
-`ban()` retourne l'instance `Ban` créée :
+`ban()` retourne l'instance `Ban` créée, ou `null` si la méthode a été appelée récursivement (le verrou statique était déjà actif pour cette instance) :
 
 ```php
 $ban = $user->ban(['reason' => 'Test']);
 
-echo $ban->id;         // 42
-echo $ban->reason;     // "Test"
-echo $ban->expired_at; // null (permanent)
+// $ban est null uniquement en cas d'appel récursif (ex: listener qui rappelle ban())
+echo $ban?->id;         // 42
+echo $ban?->reason;     // "Test"
+echo $ban?->expired_at; // null (permanent)
 ```
 
 ---
@@ -759,6 +760,10 @@ php artisan ban:list --expired
 
 # Filtrés par type de modèle
 php artisan ban:list --model="App\Models\User"
+
+# Filtrés par statut
+php artisan ban:list --status=active
+php artisan ban:list --status=cancelled
 ```
 
 **Options :**
@@ -768,8 +773,9 @@ php artisan ban:list --model="App\Models\User"
 | `--feature=` | Filtre par feature (scope) |
 | `--expired` | Inclut les bans expirés dans le résultat |
 | `--model=` | Filtre par classe Eloquent bannable |
+| `--status=active\|cancelled` | Filtre par statut du ban |
 
-**Colonnes affichées :** `ID · Bannable Type · Bannable ID · Feature · Reason · Expires at · Created at`
+**Colonnes affichées :** `ID · Bannable Type · Bannable ID · Feature · Reason · Status · Expires at · Created at`
 
 ---
 
@@ -837,6 +843,7 @@ protected $listen = [
 // ModelBanned
 $event->bannable; // modèle banni  (ex: App\Models\User)
 $event->ban;      // instance Ban créée
+$event->feature;  // feature ciblée (null = global) — raccourci vers $event->ban->feature
 
 // ModelBanUpdated
 $event->bannable;            // modèle dont le ban a été mis à jour
@@ -909,6 +916,7 @@ use Godrade\LaravelBan\Models\Ban;
 Ban::active()->get();                         // status=ACTIVE et non expiré
 Ban::active()->forFeature('comments')->get(); // actifs sur une feature
 Ban::active()->global()->get();               // bans globaux actifs
+Ban::cancelled()->get();                      // annulés via unban()
 
 // Filtrer par statut (enum ou string)
 Ban::withStatus(BanStatus::CANCELLED)->get();
@@ -1023,6 +1031,12 @@ Ban::with(['preset', 'ticket'])->get();
 
 ### `BannedIp`
 
+`BannedIp` supporte le **pruning** via `MassPrunable` : les enregistrements dont `expired_at` est antérieur à 30 jours sont automatiquement supprimés par `php artisan model:prune`.
+
+La colonne `feature` est limitée à **50 caractères** (cohérence avec la table `bans`).
+
+`BannedIp` expose également une relation polymorphique `createdBy()` (`created_by_type` / `created_by_id`) pour enregistrer l'auteur du ban IP.
+
 ```php
 use Godrade\LaravelBan\Models\BannedIp;
 
@@ -1030,10 +1044,14 @@ BannedIp::create([
     'ip_address' => '192.168.1.100',
     'reason'     => 'Attaque brute-force',
     'expired_at' => now()->addDays(30),
+    'created_by' => $admin,   // relation polymorphique optionnelle
 ]);
 
 BannedIp::active()->forIp($request->ip())->exists();
 BannedIp::active()->forIp($request->ip())->forFeature('api')->exists();
+
+// Pruning automatique (à ajouter au scheduler)
+// $schedule->command('model:prune', ['--model' => \Godrade\LaravelBan\Models\BannedIp::class])->daily();
 ```
 
 ---

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Godrade\LaravelBan\Models;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -26,7 +27,7 @@ use Illuminate\Support\Carbon;
  */
 final class BannedIp extends Model
 {
-    use SoftDeletes;
+    use MassPrunable, SoftDeletes;
 
     protected $guarded = [];
 
@@ -46,6 +47,11 @@ final class BannedIp extends Model
     public function createdBy(): MorphTo
     {
         return $this->morphTo('created_by');
+    }
+
+    public function prunable(): Builder
+    {
+        return static::where('expired_at', '<', now()->subDays(30));
     }
 
     /** Whether this IP ban is currently active. */
