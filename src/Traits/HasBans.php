@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Cache;
 use Godrade\LaravelBan\Events\ModelBanned;
 use Godrade\LaravelBan\Events\ModelBanUpdated;
 use Godrade\LaravelBan\Events\ModelUnbanned;
+use Godrade\LaravelBan\Enums\BanStatus;
 use Godrade\LaravelBan\Exceptions\AlreadyBannedException;
 use Godrade\LaravelBan\Models\Ban;
 
@@ -186,7 +187,9 @@ trait HasBans
                 $query->global();
             }
 
-            $query->get()->each->delete();
+            $query->get()->each(function (Ban $ban): void {
+                $ban->update(['status' => BanStatus::CANCELLED->value]);
+            });
 
             $this->flushBanCache($feature);
 

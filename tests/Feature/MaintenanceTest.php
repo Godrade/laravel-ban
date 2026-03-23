@@ -45,6 +45,7 @@ function maintenanceCreateSchema(): void
         $table->nullableMorphs('cause');
         $table->string('feature')->nullable();
         $table->text('reason')->nullable();
+        $table->string('status', 50)->default('active');
         $table->timestamp('expired_at')->nullable();
         $table->timestamps();
         $table->softDeletes();

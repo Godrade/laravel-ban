@@ -112,4 +112,16 @@ return [
     */
     'soft_delete' => true,
 
+    /*
+    |--------------------------------------------------------------------------
+    | Ban Statuses
+    |--------------------------------------------------------------------------
+    | Internal status values used on the bans table.
+    | 'default' is the status assigned to every newly created ban.
+    | Do not change these values after the first migration has run.
+    */
+    'statuses' => [
+        'default' => 'active',
+    ],
+
 ];

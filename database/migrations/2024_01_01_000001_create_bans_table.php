@@ -30,6 +30,10 @@ return new class extends Migration
             // Human-readable reason for the ban
             $table->text('reason')->nullable();
 
+            // Status: 'active' (enforced) or 'cancelled' (manually lifted via unban())
+            // Expiry is a calculated state, not a status value.
+            $table->string('status', 50)->default(config('ban.statuses.default', 'active'))->index();
+
             // Expiration: null means permanent
             $table->timestamp('expired_at')->nullable()->index();
 

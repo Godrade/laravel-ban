@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
+use Godrade\LaravelBan\Enums\BanStatus;
 
 /**
  * @property int                  $id
@@ -21,12 +22,14 @@ use Illuminate\Support\Carbon;
  * @property int|null             $cause_id
  * @property string|null          $feature
  * @property string|null          $reason
+ * @property BanStatus            $status
  * @property Carbon|null          $expired_at
  * @property Carbon               $created_at
  * @property Carbon               $updated_at
  * @property Carbon|null          $deleted_at
  *
  * @method static Builder active()
+ * @method static Builder withStatus(string|\UnitEnum $status)
  * @method static Builder forFeature(string $feature)
  * @method static Builder global()
  */
@@ -39,6 +42,7 @@ final class Ban extends Model
     protected function casts(): array
     {
         return [
+            'status'     => BanStatus::class,
             'expired_at' => 'datetime',
         ];
     }
@@ -66,10 +70,11 @@ final class Ban extends Model
         return $this->morphTo('cause');
     }
 
-    /** Whether this ban has not yet expired. */
+    /** Whether this ban has not yet expired and has not been cancelled. */
     public function isActive(): bool
     {
-        return $this->expired_at === null || $this->expired_at->isFuture();
+        return $this->status === BanStatus::ACTIVE
+            && ($this->expired_at === null || $this->expired_at->isFuture());
     }
 
     /**
@@ -82,13 +87,23 @@ final class Ban extends Model
         return static::where('expired_at', '<', now()->subDays(30));
     }
 
-    /** Scope: only bans that are currently active. */
+    /** Scope: only bans that are currently active (status = ACTIVE and not expired). */
     public function scopeActive(Builder $query): Builder
     {
-        return $query->where(function (Builder $q): void {
-            $q->whereNull('expired_at')
-              ->orWhere('expired_at', '>', now());
-        });
+        return $query
+            ->where('status', BanStatus::ACTIVE->value)
+            ->where(function (Builder $q): void {
+                $q->whereNull('expired_at')
+                  ->orWhere('expired_at', '>', now());
+            });
+    }
+
+    /** Scope: filter by an arbitrary status value or BanStatus enum case. */
+    public function scopeWithStatus(Builder $query, string|\UnitEnum $status): Builder
+    {
+        $value = $status instanceof \UnitEnum ? $status->value : $status;
+
+        return $query->where('status', $value);
     }
 
     /** Scope: bans tied to a specific feature. */

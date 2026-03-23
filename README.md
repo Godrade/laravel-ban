@@ -40,6 +40,7 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
 - [Cache multi-driver](#cache-multi-driver)
 - [Modèles Eloquent](#modèles-eloquent)
   - [Ban](#ban)
+  - [BanStatus — enum de statut](#banstatus--enum-de-statut)
   - [Pruning automatique](#pruning-automatique)
   - [Relation cause (polymorphique)](#relation-cause-polymorphique)
   - [Relations dynamiques](#relations-dynamiques)
@@ -121,6 +122,11 @@ return [
 
     // Conserver un historique des bans (soft delete)
     'soft_delete' => true,
+
+    // Valeurs de statut utilisées sur la colonne `status` de la table bans
+    'statuses' => [
+        'default' => 'active',
+    ],
 ];
 ```
 
@@ -203,11 +209,13 @@ echo $ban->expired_at; // null (permanent)
 
 ### Débannir
 
+`unban()` ne supprime **pas** les enregistrements — il les **annule** en passant leur `status` à `BanStatus::CANCELLED`. L'historique des bans est ainsi préservé intégralement.
+
 ```php
-// Supprime tous les bans globaux actifs
+// Annule tous les bans globaux actifs
 $user->unban();
 
-// Supprime uniquement le ban sur la feature "comments"
+// Annule uniquement le ban sur la feature "comments"
 $user->unban('comments');
 ```
 
@@ -739,7 +747,7 @@ Le cache du modèle banni est **automatiquement invalidé** après la suppressio
 | Événement | Déclenché quand |
 |---|---|
 | `Godrade\LaravelBan\Events\ModelBanned` | `ban()` crée un ban · `syncBan()` crée un nouveau ban |
-| `Godrade\LaravelBan\Events\ModelUnbanned` | `unban()` supprime des bans actifs |
+| `Godrade\LaravelBan\Events\ModelUnbanned` | `unban()` annule des bans actifs (status → CANCELLED) |
 | `Godrade\LaravelBan\Events\ModelBanUpdated` | `syncBan()` met à jour un ban actif existant |
 
 ### Écoute des événements
@@ -803,7 +811,7 @@ class NotifyAdminOnBan
 
 ## Cache multi-driver
 
-Le package met en cache le résultat de `isBanned()` et `isBannedFrom()` pour éviter des requêtes SQL répétées. Le cache est **automatiquement invalidé** dès qu'un ban est créé ou supprimé.
+Le package met en cache le résultat de `isBanned()` et `isBannedFrom()` pour éviter des requêtes SQL répétées. Le cache est **automatiquement invalidé** dès qu'un ban est créé, annulé ou mis à jour.
 
 ### Choisir un driver
 
@@ -835,17 +843,41 @@ laravel_ban_App_Models_User_42_comments
 ### `Ban`
 
 ```php
+use Godrade\LaravelBan\Enums\BanStatus;
 use Godrade\LaravelBan\Models\Ban;
 
-Ban::active()->get();                        // tous les bans actifs
+Ban::active()->get();                         // status=ACTIVE et non expiré
 Ban::active()->forFeature('comments')->get(); // actifs sur une feature
-Ban::active()->global()->get();              // bans globaux actifs
+Ban::active()->global()->get();               // bans globaux actifs
 
+// Filtrer par statut (enum ou string)
+Ban::withStatus(BanStatus::CANCELLED)->get();
+Ban::withStatus('cancelled')->get();
+
+$ban->status;     // BanStatus::ACTIVE | BanStatus::CANCELLED
 $ban->bannable;   // modèle banni  (ex: App\Models\User)
 $ban->createdBy;  // auteur du ban (ex: App\Models\Admin)
 $ban->cause;      // cause liée    (ex: App\Models\Report)
-$ban->isActive(); // bool
+$ban->isActive(); // true si status=ACTIVE et non expiré
 ```
+
+---
+
+### `BanStatus` — enum de statut
+
+```php
+use Godrade\LaravelBan\Enums\BanStatus;
+
+BanStatus::ACTIVE->value;    // 'active'    — ban en vigueur
+BanStatus::CANCELLED->value; // 'cancelled' — annulé via unban()
+
+// Note : l'état "expiré" est calculé via expired_at, pas stocké en base.
+```
+
+| Valeur | Description |
+|---|---|
+| `active` | Ban actif, en cours d'application |
+| `cancelled` | Ban annulé manuellement via `unban()` |
 
 ---
 
