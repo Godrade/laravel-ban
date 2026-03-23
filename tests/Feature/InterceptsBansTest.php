@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Godrade\LaravelBan\Attributes\LockedByBan;
+use Godrade\LaravelBan\Contracts\Bannable;
 use Godrade\LaravelBan\Middleware\BlockBannedIp;
 use Godrade\LaravelBan\Models\Ban;
 use Godrade\LaravelBan\Models\BannedIp;
@@ -23,7 +24,7 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Minimal User stub with ban capability.
  */
-class BanUser extends Model implements AuthenticatableContract
+class BanUser extends Model implements AuthenticatableContract, Bannable
 {
     use HasBans, Authenticatable;
 

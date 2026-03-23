@@ -34,6 +34,9 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
   - [ban:list](#banlist)
   - [ban:remove](#banremove)
 - [Événements](#événements)
+  - [Tableau des événements](#tableau-des-événements)
+  - [Écoute des événements](#écoute-des-événements)
+  - [Anti-récursion](#anti-récursion)
 - [Cache multi-driver](#cache-multi-driver)
 - [Modèles Eloquent](#modèles-eloquent)
   - [Ban](#ban)
@@ -308,7 +311,7 @@ $user->syncBan(['feature' => 'comments', 'reason' => 'Commentaires offensants'])
 
 | Situation | Comportement |
 |---|---|
-| Aucun ban actif sur ce scope | Crée un nouveau ban + dispatche `UserBanned` |
+| Aucun ban actif sur ce scope | Crée un nouveau ban + dispatche `ModelBanned` |
 | Ban actif existant sur ce scope | Met à jour `reason`, `expired_at`, `created_by` |
 | Ban expiré sur ce scope | Crée un nouveau ban |
 | `allow_overlapping_bans` peu importe | Jamais d'`AlreadyBannedException` |
@@ -729,23 +732,32 @@ Le cache du modèle banni est **automatiquement invalidé** après la suppressio
 
 ---
 
+## Événements
+
+### Tableau des événements
+
 | Événement | Déclenché quand |
 |---|---|
-| `Godrade\LaravelBan\Events\UserBanned` | Un ban est créé |
-| `Godrade\LaravelBan\Events\UserUnbanned` | Un ban est supprimé |
+| `Godrade\LaravelBan\Events\ModelBanned` | `ban()` crée un ban · `syncBan()` crée un nouveau ban |
+| `Godrade\LaravelBan\Events\ModelUnbanned` | `unban()` supprime des bans actifs |
+| `Godrade\LaravelBan\Events\ModelBanUpdated` | `syncBan()` met à jour un ban actif existant |
 
-### Exemple d'écoute
+### Écoute des événements
 
 ```php
-use Godrade\LaravelBan\Events\UserBanned;
-use Godrade\LaravelBan\Events\UserUnbanned;
+use Godrade\LaravelBan\Events\ModelBanned;
+use Godrade\LaravelBan\Events\ModelBanUpdated;
+use Godrade\LaravelBan\Events\ModelUnbanned;
 
 protected $listen = [
-    UserBanned::class => [
+    ModelBanned::class => [
         App\Listeners\NotifyAdminOnBan::class,
         App\Listeners\LogBanActivity::class,
     ],
-    UserUnbanned::class => [
+    ModelBanUpdated::class => [
+        App\Listeners\LogBanChange::class,
+    ],
+    ModelUnbanned::class => [
         App\Listeners\NotifyUserOnUnban::class,
     ],
 ];
@@ -754,14 +766,38 @@ protected $listen = [
 ### Payload
 
 ```php
-// UserBanned
+// ModelBanned
 $event->bannable; // modèle banni  (ex: App\Models\User)
 $event->ban;      // instance Ban créée
 
-// UserUnbanned
+// ModelBanUpdated
+$event->bannable;            // modèle dont le ban a été mis à jour
+$event->ban;                 // instance Ban après la mise à jour
+$event->originalAttributes;  // attributs avant la mise à jour (tableau brut)
+
+// ModelUnbanned
 $event->bannable; // modèle débanni
 $event->feature;  // feature ciblée (null = global)
 ```
+
+### Anti-récursion
+
+`HasBans` maintient un verrou statique par objet (`spl_object_hash`) pour empêcher toute récursion infinie si un listener d'événement rappelle `ban()`, `syncBan()` ou `unban()` sur la même instance :
+
+```php
+// Listener qui rappelle ban() → pas de boucle infinie
+class NotifyAdminOnBan
+{
+    public function handle(ModelBanned $event): void
+    {
+        // Si ceci appelle $event->bannable->ban(...), le verrou l'ignore proprement
+        // et retourne un Ban vide au lieu de boucler.
+        AuditLog::record($event->ban);
+    }
+}
+```
+
+> Le verrou est libéré dans un bloc `finally`, garantissant qu'il est toujours nettoyé même en cas d'exception.
 
 ---
 

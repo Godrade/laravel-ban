@@ -10,8 +10,9 @@ use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Facades\Cache;
-use Godrade\LaravelBan\Events\UserBanned;
-use Godrade\LaravelBan\Events\UserUnbanned;
+use Godrade\LaravelBan\Events\ModelBanned;
+use Godrade\LaravelBan\Events\ModelBanUpdated;
+use Godrade\LaravelBan\Events\ModelUnbanned;
 use Godrade\LaravelBan\Exceptions\AlreadyBannedException;
 use Godrade\LaravelBan\Models\Ban;
 
@@ -22,6 +23,12 @@ use Godrade\LaravelBan\Models\Ban;
  */
 trait HasBans
 {
+    /**
+     * Per-instance execution lock to prevent recursive ban/unban calls.
+     * Keyed by spl_object_hash($this).
+     */
+    protected static array $executingBans = [];
+
     // -------------------------------------------------------------------------
     // Relationship
     // -------------------------------------------------------------------------
@@ -47,45 +54,57 @@ trait HasBans
      */
     public function ban(array $attributes = []): Ban
     {
-        $feature   = $attributes['feature'] ?? null;
-        $createdBy = $attributes['created_by'] ?? null;
+        $lock = spl_object_hash($this);
 
-        if (! config('ban.allow_overlapping_bans', false)) {
-            $existing = $this->bans()
-                ->active()
-                ->where('feature', $feature)
-                ->first();
-
-            if ($existing !== null) {
-                throw new AlreadyBannedException($existing);
-            }
+        if (isset(self::$executingBans[$lock])) {
+            // @phpstan-ignore-next-line — intentional guard; caller must handle null
+            return new Ban();
         }
 
-        /** @var Ban $ban */
-        $ban = $this->bans()->create([
-            'feature'         => $feature,
-            'reason'          => $attributes['reason'] ?? null,
-            'expired_at'      => $attributes['expired_at'] ?? null,
-            'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
-            'created_by_id'   => $createdBy?->getKey(),
-        ]);
+        self::$executingBans[$lock] = true;
 
-        $this->flushBanCache($feature);
+        try {
+            $feature   = $attributes['feature'] ?? null;
+            $createdBy = $attributes['created_by'] ?? null;
 
-        event(new UserBanned($this, $ban));
+            if (! config('ban.allow_overlapping_bans', false)) {
+                $existing = $this->bans()
+                    ->active()
+                    ->where('feature', $feature)
+                    ->first();
 
-        return $ban;
+                if ($existing !== null) {
+                    throw new AlreadyBannedException($existing);
+                }
+            }
+
+            /** @var Ban $ban */
+            $ban = $this->bans()->create([
+                'feature'         => $feature,
+                'reason'          => $attributes['reason'] ?? null,
+                'expired_at'      => $attributes['expired_at'] ?? null,
+                'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
+                'created_by_id'   => $createdBy?->getKey(),
+            ]);
+
+            $this->flushBanCache($feature);
+
+            event(new ModelBanned($this, $ban));
+
+            return $ban;
+        } finally {
+            unset(self::$executingBans[$lock]);
+        }
     }
 
     /**
      * Synchronize the active ban for this model on the given scope.
      *
      * - If an active ban already exists on the same feature, it is **updated**
-     *   in place (reason, expired_at, created_by).
-     * - If no active ban exists, a new one is **created**.
+     *   in place (reason, expired_at, created_by) and ModelBanUpdated is dispatched.
+     * - If no active ban exists, a new one is **created** and ModelBanned is dispatched.
      *
-     * Unlike ban(), this method never throws AlreadyBannedException, making it
-     * safe for idempotent operations (e.g. API upserts, scheduled tasks).
+     * Unlike ban(), this method never throws AlreadyBannedException.
      *
      * @param array{
      *     reason?: string|null,
@@ -96,35 +115,52 @@ trait HasBans
      */
     public function syncBan(array $attributes = []): Ban
     {
-        $feature   = $attributes['feature'] ?? null;
-        $createdBy = $attributes['created_by'] ?? null;
+        $lock = spl_object_hash($this);
 
-        $payload = [
-            'reason'          => $attributes['reason'] ?? null,
-            'expired_at'      => $attributes['expired_at'] ?? null,
-            'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
-            'created_by_id'   => $createdBy?->getKey(),
-        ];
-
-        /** @var Ban|null $existing */
-        $existing = $this->bans()
-            ->active()
-            ->where('feature', $feature)
-            ->first();
-
-        if ($existing !== null) {
-            $existing->update($payload);
-            $existing->refresh();
-            $ban = $existing;
-        } else {
-            /** @var Ban $ban */
-            $ban = $this->bans()->create(array_merge($payload, ['feature' => $feature]));
-            event(new UserBanned($this, $ban));
+        if (isset(self::$executingBans[$lock])) {
+            // @phpstan-ignore-next-line
+            return new Ban();
         }
 
-        $this->flushBanCache($feature);
+        self::$executingBans[$lock] = true;
 
-        return $ban;
+        try {
+            $feature   = $attributes['feature'] ?? null;
+            $createdBy = $attributes['created_by'] ?? null;
+
+            $payload = [
+                'reason'          => $attributes['reason'] ?? null,
+                'expired_at'      => $attributes['expired_at'] ?? null,
+                'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
+                'created_by_id'   => $createdBy?->getKey(),
+            ];
+
+            /** @var Ban|null $existing */
+            $existing = $this->bans()
+                ->active()
+                ->where('feature', $feature)
+                ->first();
+
+            if ($existing !== null) {
+                $originalAttributes = $existing->getOriginal();
+                $existing->update($payload);
+                $existing->refresh();
+                $ban = $existing;
+
+                event(new ModelBanUpdated($this, $ban, $originalAttributes));
+            } else {
+                /** @var Ban $ban */
+                $ban = $this->bans()->create(array_merge($payload, ['feature' => $feature]));
+
+                event(new ModelBanned($this, $ban));
+            }
+
+            $this->flushBanCache($feature);
+
+            return $ban;
+        } finally {
+            unset(self::$executingBans[$lock]);
+        }
     }
 
     /**
@@ -133,19 +169,31 @@ trait HasBans
      */
     public function unban(?string $feature = null): void
     {
-        $query = $this->bans()->active();
+        $lock = spl_object_hash($this);
 
-        if ($feature !== null) {
-            $query->forFeature($feature);
-        } else {
-            $query->global();
+        if (isset(self::$executingBans[$lock])) {
+            return;
         }
 
-        $query->get()->each->delete();
+        self::$executingBans[$lock] = true;
 
-        $this->flushBanCache($feature);
+        try {
+            $query = $this->bans()->active();
 
-        event(new UserUnbanned($this, $feature));
+            if ($feature !== null) {
+                $query->forFeature($feature);
+            } else {
+                $query->global();
+            }
+
+            $query->get()->each->delete();
+
+            $this->flushBanCache($feature);
+
+            event(new ModelUnbanned($this, $feature));
+        } finally {
+            unset(self::$executingBans[$lock]);
+        }
     }
 
     /**
@@ -232,3 +280,4 @@ trait HasBans
             : Cache::store();
     }
 }
+

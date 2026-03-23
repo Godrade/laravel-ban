@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Godrade\LaravelBan\Contracts\Bannable;
 use Godrade\LaravelBan\Models\Ban;
 use Godrade\LaravelBan\Traits\HasBans;
 use Illuminate\Auth\Authenticatable;
@@ -15,7 +16,7 @@ use Illuminate\Support\Facades\Schema;
 // Stubs
 // ---------------------------------------------------------------------------
 
-class MaintenanceUser extends Model implements AuthenticatableContract
+class MaintenanceUser extends Model implements AuthenticatableContract, Bannable
 {
     use HasBans, Authenticatable;
 
