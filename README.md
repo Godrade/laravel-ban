@@ -25,6 +25,8 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
   - [@banned / @notBanned](#banned--notbanned)
   - [@bannedFrom](#bannedfrom)
   - [@bannedIp](#bannedip)
+  - [@anyBan](#anyban)
+  - [@allBanned](#allbanned)
 - [Intégration Livewire](#intégration-livewire)
   - [Attribut #\[LockedByBan\]](#attribut-lockedbyban)
   - [Trait InterceptsBans](#trait-interceptsbans)
@@ -515,6 +517,64 @@ Vérifie si l'adresse IP courante (ou une IP explicite) est bannie.
 // AppServiceProvider::boot()
 \Godrade\LaravelBan\Blade\BanDirectives::flushIpCache();
 ```
+
+---
+
+### `@anyBan`
+
+Affiche le bloc si le modèle est banni d'**au moins une** des features passées (logique **OR**).
+
+```
+@anyBan('feature1', 'feature2', ..., $model = null)
+```
+
+```blade
+{{-- Banni du forum OU des commentaires --}}
+@anyBan('forum', 'comments')
+    <p>Accès restreint à plusieurs sections.</p>
+@endanyBan
+
+{{-- Sans feature → vérifie le ban global --}}
+@anyBan
+    <p>Votre compte est suspendu.</p>
+@endanyBan
+
+{{-- Modèle arbitraire --}}
+@anyBan('posts', 'comments', $shop)
+    <p>Cette boutique est restreinte.</p>
+@endanyBan
+```
+
+---
+
+### `@allBanned`
+
+Affiche le bloc uniquement si le modèle est banni de **toutes** les features passées (logique **AND**).
+
+```
+@allBanned('feature1', 'feature2', ..., $model = null)
+```
+
+```blade
+{{-- Banni du forum ET des commentaires --}}
+@allBanned('forum', 'comments')
+    <p>Vous êtes banni de toutes les sections de discussion.</p>
+@endallBanned
+
+{{-- Sans feature → vérifie le ban global --}}
+@allBanned
+    <p>Votre compte est suspendu.</p>
+@endallBanned
+```
+
+**Règles communes à `@anyBan` et `@allBanned` :**
+
+| Situation | Comportement |
+|---|---|
+| Aucune feature passée | Vérifie `isBanned()` (ban global) |
+| Dernier argument implémente `Bannable` | Utilisé comme modèle cible |
+| Dernier argument absent ou non `Bannable` | Utilise `auth()->user()` |
+| Utilisateur non authentifié | Retourne `false` |
 
 ---
 
