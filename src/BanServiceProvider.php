@@ -84,7 +84,7 @@ final class BanServiceProvider extends ServiceProvider
     private function bootBladeDirectives(): void
     {
         $this->callAfterResolving('blade.compiler', function ($blade): void {
-            new BanDirectives()->register($blade);
+            (new BanDirectives())->register($blade);
         });
     }
 
