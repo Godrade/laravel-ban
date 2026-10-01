@@ -15,6 +15,7 @@ La première version publiée est **1.0.0-beta.1 (Bêta 1)**. La version stable 
 
 ### Modifications
 
+- Réorganisation de la documentation : démarrage rapide dans le README, exemples par besoin et guides séparés pour la référence, les comportements avancés, Livewire et la contribution. Distinction explicite entre la Bêta 1 et les changements en préparation.
 - **Rupture de compatibilité :** l'intégration optionnelle Livewire prend uniquement en charge les versions 3 et 4. Les actions et listeners interdits renvoient HTTP 403 avant leur exécution, au lieu de retourner silencieusement `null`.
 - **Rupture de compatibilité :** suppression du répartiteur public `callMethod()`. La méthode `checkBanLock()` devient protégée et reste disponible pour les contrôles explicites à l'intérieur d'un composant.
 - **Rupture de compatibilité :** `syncBan()` conserve les champs omis lors d'une mise à jour. Passez explicitement `null` pour effacer une raison, une expiration, un auteur ou une cause.
