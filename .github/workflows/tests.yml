@@ -13,9 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { php: '8.2', laravel: '11', testbench: '^9.0', pest: '^3.0', livewire: '^3.0' }
           - { php: '8.2', laravel: '12', testbench: '^10.0', pest: '^3.0', livewire: '^3.0' }
-          - { php: '8.3', laravel: '11', testbench: '^9.0', pest: '^4.0', livewire: '^4.0' }
           - { php: '8.3', laravel: '12', testbench: '^10.0', pest: '^4.0', livewire: '^4.0' }
           - { php: '8.3', laravel: '13', testbench: '^11.0', pest: '^4.0', livewire: '^3.0' }
           - { php: '8.4', laravel: '13', testbench: '^11.0', pest: '^4.0', livewire: '^4.0' }
@@ -28,10 +26,6 @@ jobs:
           coverage: none
           tools: composer:v2
       - name: Install compatibility dependencies
-        # Only isolated Laravel 11 compatibility jobs allow its unpatched
-        # upstream advisories. The quality job audits current releases.
-        env:
-          COMPOSER_NO_SECURITY_BLOCKING: ${{ matrix.laravel == '11' && '1' || '0' }}
         run: |
           composer require --dev \
             "orchestra/testbench:${{ matrix.testbench }}" \

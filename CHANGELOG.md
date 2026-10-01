@@ -1,68 +1,75 @@
-# Changelog
+# Historique des versions
 
-All notable changes to this project will be documented in this file.
+Ce fichier répertorie les changements notables du package.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Son format s'inspire de [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Les numéros de version suivent le [versionnement sémantique](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+La première version publiée est **1.0.0-beta.1 (Bêta 1)**. La version stable 1.0.0 n'a pas encore été publiée.
 
-### Changed
+## [Non publié]
 
-- **Breaking:** optional Livewire integration now supports only Livewire 3 and 4. Locked actions and event listeners return HTTP 403 before execution instead of silently returning `null`.
-- **Breaking:** removed the public `callMethod()` dispatcher; `checkBanLock()` is now protected and remains available for explicit checks inside a component.
-- **Breaking:** `syncBan()` preserves omitted fields on update. Pass `null` explicitly to clear a reason, expiration, creator or cause.
-- Ban events are dispatched after the surrounding transaction commits, after cache invalidation. Rolled-back changes no longer dispatch these events.
-- User-ban cache entries use hashed, versioned `v2` keys. Previous cache entries are no longer read and expire naturally.
-- Dynamic relations accept Eloquent models and the supported `belongsTo`, `hasOne` and `hasMany` types; invalid definitions are logged and ignored.
+### Suppressions
 
-### Fixed
+- **Rupture de compatibilité :** suppression du support de Laravel 11. Le package nécessite désormais Laravel 12 ou 13. Testbench 9, les jobs CI Laravel 11 et leur exception au blocage de sécurité Composer sont supprimés.
 
-- Cache invalidation for global and feature bans, the literal `global` feature, expiration, direct Eloquent saves/deletes/restores, owner or scope changes, and polymorphic aliases.
-- Cache reads inside transactions bypass shared entries; writes invalidate again after commit and prevent in-flight reads from repopulating the current generation with stale results.
-- User and IP ban lookups use the write connection so read-replica lag cannot repopulate the cache with an older ban state.
-- Ban creation and synchronization lock the persisted parent model in a transaction, including when no ban exists yet. Recursion protection now follows database identity across model instances.
-- Created bans expose their active status immediately, and `cause` is persisted by `ban()` and `syncBan()`.
-- Both ban models respect `soft_delete=false` without querying a missing `deleted_at` column.
-- IP and Blade memoization is shared per HTTP request, respects expiration and transactions, and is invalidated by Eloquent mutations without manual Octane resets.
-- Multiple bans can share an IP address across features or historical records. Valid IPv6 addresses are normalized when saved and queried, and `BannedIp::create()` accepts a `created_by` model.
-- Livewire checks cover method and class attributes, inherited locks, feature overrides, and both attributed and configured event listeners without exposing private methods.
-- `ban:list --status=cancelled` includes cancellation history, model filters resolve morph aliases, and removal invalidates cache without resolving a morph alias as a class name.
-- Invalid CLI durations and duplicate bans produce a clear failure instead of creating unintended permanent bans or exposing uncaught errors.
-- User middleware returns JSON 403 for API requests, supports relative redirect paths and falls back to HTTP 403 for missing routes or redirect loops.
-- Dynamic `belongsTo` relations infer their foreign key from the configured relation name.
-- Pruning documentation explicitly schedules both package models in Laravel 11+.
+### Modifications
 
-### Added
+- **Rupture de compatibilité :** l'intégration optionnelle Livewire prend uniquement en charge les versions 3 et 4. Les actions et listeners interdits renvoient HTTP 403 avant leur exécution, au lieu de retourner silencieusement `null`.
+- **Rupture de compatibilité :** suppression du répartiteur public `callMethod()`. La méthode `checkBanLock()` devient protégée et reste disponible pour les contrôles explicites à l'intérieur d'un composant.
+- **Rupture de compatibilité :** `syncBan()` conserve les champs omis lors d'une mise à jour. Passez explicitement `null` pour effacer une raison, une expiration, un auteur ou une cause.
+- Les événements de bannissement sont émis après la validation de la transaction englobante et l'invalidation du cache. Une transaction annulée ne déclenche plus ces événements.
+- Le cache des bannissements utilise des clés hachées et versionnées `v2`. Les anciennes entrées ne sont plus consultées et expirent naturellement.
+- Les relations dynamiques acceptent les modèles Eloquent et les types `belongsTo`, `hasOne` et `hasMany`. Les définitions invalides sont journalisées et ignorées.
 
-- Upgrade migration `2026_10_01_000003_allow_multiple_bans_per_ip.php`: removes single-IP uniqueness and normalizes existing IPv6 records. Its rollback deliberately preserves the non-unique index and normalized values to avoid losing newer data.
-- Regression tests using real package migrations and real Livewire components, covering cache lifecycle, transactions, IP requests, schema configuration, HTTP responses and console validation.
-- Composer commands for Pint formatting checks, Larastan/PHPStan analysis and tests, combined under `composer check`.
-- Opt-in MySQL/PostgreSQL integration tests configured through `BAN_TEST_DB_*`, including concurrent mutations. These tests require a disposable database and recreate their `integration_*` tables.
-- CI jobs for the Laravel 11/12/13 and Livewire 3/4 combinations, optional operation without Livewire, and MySQL 8/PostgreSQL 16 services.
-- Compatibility documentation as of October 1, 2026: Laravel 11 remains declared compatible, but unresolved upstream dependency advisories block normal Composer installation. Only isolated legacy compatibility jobs permit those dependencies for testing; the current-dependency quality job retains strict security blocking and auditing.
+### Corrections
 
-## [1.0.0] - 2025-01-01
+- Correction de l'invalidation du cache pour les bans globaux et par fonctionnalité, la fonctionnalité nommée `global`, les expirations, les sauvegardes, suppressions et restaurations Eloquent directes, les changements de modèle cible ou de périmètre, et les alias polymorphiques.
+- Les vérifications effectuées dans une transaction ignorent le cache partagé. Les écritures l'invalident à nouveau après validation de la transaction et empêchent une lecture déjà en cours de réintroduire un résultat périmé dans la génération courante.
+- Les vérifications de bans de modèles et d'IP utilisent la connexion d'écriture afin qu'une réplique de lecture en retard ne remette pas un ancien état en cache.
+- La création et la synchronisation d'un ban verrouillent le modèle parent enregistré dans une transaction, même lorsqu'aucun ban n'existe encore. La protection contre la récursion repose désormais sur l'identité en base, y compris entre plusieurs instances du même modèle.
+- Les bans créés exposent immédiatement leur statut configuré. L'attribut `cause` est enregistré par `ban()` et `syncBan()`.
+- Les deux modèles de ban respectent `soft_delete=false` sans interroger une colonne `deleted_at` absente.
+- La mémoïsation des bans IP est partagée entre le middleware et Blade pendant chaque requête HTTP. Elle tient compte des expirations et des transactions, et les mutations Eloquent l'invalident sans réinitialisation manuelle sous Octane.
+- Une même IP peut avoir plusieurs bans par fonctionnalité ou dans son historique. Les adresses IPv6 valides sont normalisées à l'enregistrement et à la recherche. `BannedIp::create()` accepte un modèle dans `created_by`.
+- Les contrôles Livewire couvrent les attributs de méthode et de classe, les restrictions héritées, la priorité des fonctionnalités et les listeners déclarés par attribut ou configuration, sans exposer les méthodes privées.
+- `ban:list --status=cancelled` affiche l'historique des annulations. Les filtres de modèle résolvent les alias polymorphiques et la suppression invalide le cache sans traiter ces alias comme des noms de classe.
+- Les durées invalides et les bans en doublon saisis en ligne de commande provoquent un échec explicite, au lieu de créer un ban permanent involontaire ou de laisser remonter une exception non gérée.
+- Le middleware utilisateur renvoie une réponse JSON 403 aux requêtes API, accepte les chemins de redirection relatifs et renvoie HTTP 403 lorsqu'une route manque ou qu'une redirection créerait une boucle.
+- Les relations dynamiques `belongsTo` déduisent leur clé étrangère du nom de relation configuré.
+- La documentation du nettoyage automatique planifie explicitement les deux modèles du package sous Laravel 12 et 13.
 
-### Added
+### Ajouts
 
-- Core `ban()`, `unban()`, `isBanned()`, and `isBannedFrom()` API with multi-driver cache support via `HasBans` trait
-- Feature-scoped bans allowing bans to target specific areas (e.g. `comments`, `forum`)
-- `AlreadyBannedException` with overlapping ban protection (configurable via `allow_overlapping_bans`)
-- `syncBan()` upsert method for idempotent ban creation and updates
-- `BanStatus` enum with `ACTIVE` and `CANCELLED` states — `unban()` cancels rather than deletes records
-- Anti-recursion static lock in `HasBans` using `spl_object_hash`
-- `Ban` and `BannedIp` Eloquent models with `MassPrunable` support
-- Dynamic Eloquent relations on the `Ban` model via `config('ban.relations')`
-- `cause()` polymorphic relation on the `Ban` model
-- `ModelBanned`, `ModelUnbanned`, and `ModelBanUpdated` events
-- `CheckBanned` middleware with feature scope and redirect configuration
-- `BlockBannedIp` middleware with per-request memoization
-- `#[LockedByBan]` PHP 8.2 attribute (`TARGET_METHOD | TARGET_CLASS`)
-- Initial `InterceptsBans` trait for Livewire integration
-- Blade directives: `@banned`, `@notBanned`, `@bannedFrom`, `@bannedIp`, `@anyBan`, `@allBanned`
-- Artisan commands: `ban:user`, `ban:config`, `ban:list`, `ban:remove`
-- Full Pest test suite
+- Migration de mise à jour `2026_10_01_000003_allow_multiple_bans_per_ip.php` : suppression de l'unicité par IP et normalisation des adresses IPv6 existantes. Son annulation conserve volontairement l'index non unique et les valeurs normalisées afin de préserver les données ajoutées depuis.
+- Tests de non-régression utilisant les migrations réelles du package et de vrais composants Livewire : cycle de vie du cache, transactions, requêtes IP, configuration du schéma, réponses HTTP et validation des commandes.
+- Commandes Composer pour vérifier le formatage avec Pint, analyser le code avec Larastan/PHPStan et exécuter les tests, regroupées sous `composer check`.
+- Tests d'intégration MySQL/PostgreSQL activés explicitement avec les variables `BAN_TEST_DB_*`, incluant les modifications concurrentes. Ils nécessitent une base jetable et recréent leurs tables `integration_*`.
+- Jobs CI couvrant Laravel 12/13 avec Livewire 3/4, le fonctionnement sans Livewire et les services MySQL 8/PostgreSQL 16. Le blocage de sécurité Composer reste actif dans tous les jobs.
 
-[Unreleased]: https://github.com/godrade/laravel-ban/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/godrade/laravel-ban/releases/tag/v1.0.0
+## [1.0.0-beta.1] — 2026-03-23
+
+Première préversion du package, avant la sortie d'une version stable 1.0.0.
+
+### Ajouts
+
+- API `ban()`, `unban()`, `isBanned()` et `isBannedFrom()`, avec prise en charge de plusieurs pilotes de cache via le trait `HasBans`.
+- Bans limités à une fonctionnalité, par exemple `comments` ou `forum`.
+- Exception `AlreadyBannedException` et protection contre les bans actifs en doublon, configurable avec `allow_overlapping_bans`.
+- Méthode `syncBan()` pour créer ou mettre à jour un ban.
+- Enum `BanStatus` avec les états `ACTIVE` et `CANCELLED` : `unban()` annule les enregistrements au lieu de les supprimer.
+- Verrou statique anti-récursion dans `HasBans`, fondé sur `spl_object_hash`.
+- Modèles Eloquent `Ban` et `BannedIp`, avec prise en charge de `MassPrunable`.
+- Relations Eloquent dynamiques sur `Ban`, configurées avec `config('ban.relations')`.
+- Relation polymorphique `cause()` sur le modèle `Ban`.
+- Événements `ModelBanned`, `ModelUnbanned` et `ModelBanUpdated`.
+- Middleware `CheckBanned`, avec restriction par fonctionnalité et redirection configurable.
+- Middleware `BlockBannedIp`, avec mémoïsation des vérifications.
+- Attribut PHP `#[LockedByBan]`, applicable aux méthodes et aux classes.
+- Première intégration Livewire avec le trait `InterceptsBans`.
+- Directives Blade : `@banned`, `@notBanned`, `@bannedFrom`, `@bannedIp`, `@anyBan` et `@allBanned`.
+- Commandes Artisan : `ban:user`, `ban:config`, `ban:list` et `ban:remove`.
+- Suite de tests Pest.
+
+[Non publié]: https://github.com/godrade/laravel-ban/compare/v1.0.0-beta.1...HEAD
+[1.0.0-beta.1]: https://github.com/godrade/laravel-ban/releases/tag/v1.0.0-beta.1

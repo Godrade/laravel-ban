@@ -2,9 +2,7 @@
 
 Un package Laravel complet, performant et hautement configurable pour gérer les bans d'utilisateurs et d'adresses IP.
 
-**Compatibilité :** Laravel 11 / 12 / 13, avec la version PHP requise par Laravel (PHP 8.2 minimum pour le package). Intégration optionnelle avec Livewire 3 ou 4.
-
-Au 1er octobre 2026, Laravel 11 reste déclaré compatible, mais des dépendances de cet environnement présentent des avis de sécurité amont non corrigés : Composer bloque leur installation normale. Les jobs de compatibilité Laravel 11 autorisent cette installation uniquement dans la CI isolée pour tester l'existant. Le job de qualité sur les versions récentes conserve le blocage de sécurité et l'audit Composer strict.
+**Compatibilité :** Laravel 12 / 13, avec la version PHP requise par Laravel (PHP 8.2 minimum pour le package). Intégration optionnelle avec Livewire 3 ou 4.
 
 ---
 
@@ -396,7 +394,7 @@ Route::middleware('ban.ip')->group(function () {
 });
 ```
 
-Pour l'appliquer globalement dans Laravel 11+, ajoutez-le au callback `withMiddleware` de `bootstrap/app.php` :
+Pour l'appliquer globalement, ajoutez-le au callback `withMiddleware` de `bootstrap/app.php` :
 
 ```php
 // bootstrap/app.php
@@ -1000,7 +998,7 @@ php artisan model:prune \
   --model='Godrade\LaravelBan\Models\BannedIp'
 ```
 
-Dans Laravel 11+, planifiez cette commande dans `routes/console.php` :
+Planifiez cette commande dans `routes/console.php` :
 
 ```php
 use Godrade\LaravelBan\Models\Ban;
@@ -1170,9 +1168,7 @@ Sans `BAN_TEST_DB_DRIVER`, ces tests sont ignorés. Les valeurs supportées sont
 
 ### Intégration continue
 
-Le workflow configure une matrice Laravel 11 / 12 / 13 avec Livewire 3 / 4, un job du cœur du package sans Livewire installé, et des jobs de base de données utilisant les services MySQL 8 et PostgreSQL 16. Le job `quality` vérifie Composer, le formatage, l'analyse statique et les avis de sécurité sur les dépendances récentes.
-
-L'exception `COMPOSER_NO_SECURITY_BLOCKING` est limitée aux jobs Laravel 11 isolés pour couvrir cette compatibilité malgré les avis amont ; elle n'est pas appliquée au job `quality` ni aux installations applicatives.
+Le workflow configure une matrice Laravel 12 / 13 avec Livewire 3 / 4, un job du cœur du package sans Livewire installé, et des jobs de base de données utilisant les services MySQL 8 et PostgreSQL 16. Le job `quality` vérifie Composer, le formatage, l'analyse statique et les avis de sécurité. Le blocage de sécurité Composer reste actif dans tous les jobs.
 
 ---
 
