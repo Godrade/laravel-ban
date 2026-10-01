@@ -4,17 +4,20 @@ declare(strict_types=1);
 
 namespace Godrade\LaravelBan;
 
-use Illuminate\Routing\Router;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\ServiceProvider;
 use Godrade\LaravelBan\Blade\BanDirectives;
 use Godrade\LaravelBan\Console\Commands\BanConfigCommand;
 use Godrade\LaravelBan\Console\Commands\BanListCommand;
 use Godrade\LaravelBan\Console\Commands\BanRemoveCommand;
 use Godrade\LaravelBan\Console\Commands\BanUserCommand;
+use Godrade\LaravelBan\Livewire\BanActionGuard;
 use Godrade\LaravelBan\Middleware\BlockBannedIp;
 use Godrade\LaravelBan\Middleware\CheckBanned;
 use Godrade\LaravelBan\Models\Ban;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\ServiceProvider;
+use Livewire\Component;
 
 final class BanServiceProvider extends ServiceProvider
 {
@@ -30,6 +33,7 @@ final class BanServiceProvider extends ServiceProvider
         $this->bootBladeDirectives();
         $this->bootCommands();
         $this->bootDynamicRelations();
+        $this->bootLivewire();
     }
 
     // -------------------------------------------------------------------------
@@ -38,8 +42,10 @@ final class BanServiceProvider extends ServiceProvider
 
     public function register(): void
     {
+        $this->app->singleton(BanActionGuard::class);
+
         $this->mergeConfigFrom(
-            path: __DIR__ . '/../config/ban.php',
+            path: __DIR__.'/../config/ban.php',
             key: 'ban',
         );
     }
@@ -56,18 +62,18 @@ final class BanServiceProvider extends ServiceProvider
 
         // Config
         $this->publishes([
-            __DIR__ . '/../config/ban.php' => config_path('ban.php'),
+            __DIR__.'/../config/ban.php' => config_path('ban.php'),
         ], 'ban-config');
 
         // Migrations
         $this->publishes([
-            __DIR__ . '/../database/migrations' => database_path('migrations'),
+            __DIR__.'/../database/migrations' => database_path('migrations'),
         ], 'ban-migrations');
     }
 
     private function bootMigrations(): void
     {
-        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
     }
 
     private function bootMiddleware(): void
@@ -84,7 +90,7 @@ final class BanServiceProvider extends ServiceProvider
     private function bootBladeDirectives(): void
     {
         $this->callAfterResolving('blade.compiler', function ($blade): void {
-            (new BanDirectives())->register($blade);
+            (new BanDirectives)->register($blade);
         });
     }
 
@@ -112,39 +118,65 @@ final class BanServiceProvider extends ServiceProvider
      */
     private function bootDynamicRelations(): void
     {
-        /** @var array<string, array{type: string, related: class-string, foreign_key?: string, owner_key?: string}> $relations */
         $relations = config('ban.relations', []);
 
-        if (empty($relations)) {
+        if (! is_array($relations) || empty($relations)) {
             return;
         }
 
-        $reserved = config('ban.reserved_relations', ['bannable', 'createdBy', 'cause']);
+        $reserved = array_merge(['bannable', 'createdBy', 'cause'], config('ban.reserved_relations', []));
 
         foreach ($relations as $name => $definition) {
-            if (in_array($name, $reserved, strict: true)) {
+            if (! is_string($name) || ! preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $name) || method_exists(Ban::class, $name) || in_array($name, $reserved, strict: true)) {
                 Log::warning("[LaravelBan] Cannot register dynamic relation \"{$name}\": name is reserved.", [
                     'reserved' => $reserved,
                 ]);
+
+                continue;
+            }
+
+            if (! is_array($definition)) {
+                Log::error("[LaravelBan] Cannot register dynamic relation \"{$name}\": definition must be an array.");
+
                 continue;
             }
 
             $related = $definition['related'] ?? null;
 
-            if ($related === null || ! class_exists($related)) {
-                Log::error("[LaravelBan] Cannot register dynamic relation \"{$name}\": related class \"{$related}\" does not exist.");
+            if (! is_string($related) || ! is_subclass_of($related, Model::class)) {
+                Log::error("[LaravelBan] Cannot register dynamic relation \"{$name}\": related must be an Eloquent model class.");
+
                 continue;
             }
 
-            $type       = $definition['type']        ?? 'belongsTo';
+            $type = $definition['type'] ?? 'belongsTo';
+
+            if (! in_array($type, ['belongsTo', 'hasOne', 'hasMany'], true)) {
+                Log::error("[LaravelBan] Cannot register dynamic relation \"{$name}\": supported types are belongsTo, hasOne and hasMany.");
+
+                continue;
+            }
+
             $foreignKey = $definition['foreign_key'] ?? null;
-            $ownerKey   = $definition['owner_key']   ?? null;
+            $ownerKey = $definition['owner_key'] ?? null;
+            $localKey = $definition['local_key'] ?? null;
 
-            Ban::resolveRelationUsing($name, function (Ban $ban) use ($type, $related, $foreignKey, $ownerKey) {
-                $args = array_filter([$related, $foreignKey, $ownerKey], fn ($v) => $v !== null);
-
-                return $ban->{$type}(...array_values($args));
+            Ban::resolveRelationUsing($name, function (Ban $ban) use ($name, $type, $related, $foreignKey, $ownerKey, $localKey) {
+                return match ($type) {
+                    'belongsTo' => $ban->belongsTo($related, $foreignKey, $ownerKey, $name),
+                    'hasOne' => $ban->hasOne($related, $foreignKey, $localKey),
+                    'hasMany' => $ban->hasMany($related, $foreignKey, $localKey),
+                };
             });
         }
+    }
+
+    private function bootLivewire(): void
+    {
+        $this->app->booted(function (): void {
+            if (class_exists(Component::class) && $this->app->bound('livewire')) {
+                $this->app->make(BanActionGuard::class)->register();
+            }
+        });
     }
 }

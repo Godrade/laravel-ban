@@ -2,54 +2,119 @@ name: Tests
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   tests:
-    name: PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }}
+    name: PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }} / Livewire ${{ matrix.livewire }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - php: "8.2"
-            laravel: "11"
-            testbench: "^9.0"
-            pest: "^3.0"
-            pest_laravel: "^3.0"
-          - php: "8.2"
-            laravel: "12"
-            testbench: "^10.0"
-            pest: "^3.0"
-            pest_laravel: "^3.0"
-          - php: "8.3"
-            laravel: "11"
-            testbench: "^9.0"
-            pest: "^4.0"
-            pest_laravel: "^4.0"
-          - php: "8.3"
-            laravel: "12"
-            testbench: "^10.0"
-            pest: "^4.0"
-            pest_laravel: "^4.0"
-          - php: "8.3"
-            laravel: "13"
-            testbench: "^11.0"
-            pest: "^4.0"
-            pest_laravel: "^4.0"
+          - { php: '8.2', laravel: '11', testbench: '^9.0', pest: '^3.0', livewire: '^3.0' }
+          - { php: '8.2', laravel: '12', testbench: '^10.0', pest: '^3.0', livewire: '^3.0' }
+          - { php: '8.3', laravel: '11', testbench: '^9.0', pest: '^4.0', livewire: '^4.0' }
+          - { php: '8.3', laravel: '12', testbench: '^10.0', pest: '^4.0', livewire: '^4.0' }
+          - { php: '8.3', laravel: '13', testbench: '^11.0', pest: '^4.0', livewire: '^3.0' }
+          - { php: '8.4', laravel: '13', testbench: '^11.0', pest: '^4.0', livewire: '^4.0' }
     steps:
       - uses: actions/checkout@v4
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo_sqlite
           coverage: none
-      - name: Install dependencies
+          tools: composer:v2
+      - name: Install compatibility dependencies
+        # Only isolated Laravel 11 compatibility jobs allow its unpatched
+        # upstream advisories. The quality job audits current releases.
+        env:
+          COMPOSER_NO_SECURITY_BLOCKING: ${{ matrix.laravel == '11' && '1' || '0' }}
         run: |
           composer require --dev \
             "orchestra/testbench:${{ matrix.testbench }}" \
             "pestphp/pest:${{ matrix.pest }}" \
-            "pestphp/pest-plugin-laravel:${{ matrix.pest_laravel }}" \
-            --no-update
+            "pestphp/pest-plugin-laravel:${{ matrix.pest }}" \
+            "livewire/livewire:${{ matrix.livewire }}" --no-update
           composer update --prefer-dist --no-interaction
-      - name: Run tests
-        run: ./vendor/bin/pest
+      - run: composer test
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite
+          coverage: none
+      - run: composer update --prefer-dist --no-interaction
+      - run: composer validate --strict
+      - run: composer lint
+      - run: composer analyse
+      - run: composer audit
+
+  without-livewire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite
+          coverage: none
+      - run: |
+          composer remove --dev livewire/livewire --no-update
+          composer update --prefer-dist --no-interaction
+      - name: Verify the optional integration stays optional
+        run: ./vendor/bin/pest tests/Feature/CoreBanTest.php tests/Feature/BanCacheLifecycleTest.php tests/Feature/HttpAndConsoleTest.php tests/Feature/IpBanRegressionTest.php
+
+  databases:
+    name: Database ${{ matrix.driver }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { driver: mysql, port: '3306' }
+          - { driver: pgsql, port: '5432' }
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: laravel_ban
+          MYSQL_ROOT_PASSWORD: testing
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -ptesting"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laravel_ban
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: testing
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U root -d laravel_ban"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      BAN_TEST_DB_DRIVER: ${{ matrix.driver }}
+      BAN_TEST_DB_HOST: 127.0.0.1
+      BAN_TEST_DB_PORT: ${{ matrix.port }}
+      BAN_TEST_DB_DATABASE: laravel_ban
+      BAN_TEST_DB_USERNAME: root
+      BAN_TEST_DB_PASSWORD: testing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite, pdo_mysql, pdo_pgsql
+          coverage: none
+      - run: composer update --prefer-dist --no-interaction
+      - run: ./vendor/bin/pest tests/Feature/RelationalDatabaseTest.php

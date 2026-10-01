@@ -23,9 +23,10 @@ use Illuminate\Support\Facades\Schema;
 
 class CoreBanUser extends Model implements AuthenticatableContract, Bannable
 {
-    use HasBans, Authenticatable;
+    use Authenticatable, HasBans;
 
-    protected $table   = 'ban_users';
+    protected $table = 'ban_users';
+
     protected $guarded = [];
 }
 
@@ -73,13 +74,13 @@ function banUser(): CoreBanUser
 describe('ban() basics', function () {
 
     it('creates a Ban record with correct attributes', function () {
-        $user   = banUser();
+        $user = banUser();
         $expiry = now()->addDay();
 
         $ban = $user->ban([
-            'reason'     => 'Spam',
+            'reason' => 'Spam',
             'expired_at' => $expiry,
-            'feature'    => 'comments',
+            'feature' => 'comments',
         ]);
 
         expect($ban)->toBeInstanceOf(Ban::class)
@@ -97,13 +98,13 @@ describe('ban() basics', function () {
     it('sets status = active', function () {
         $ban = banUser()->ban(['reason' => 'status check']);
 
-        // Refresh from DB so the database default ('active') is cast to BanStatus::ACTIVE
-        expect($ban->fresh()->status)->toBe(BanStatus::ACTIVE);
+        expect($ban->status)->toBe(BanStatus::ACTIVE)
+            ->and($ban->isActive())->toBeTrue();
     });
 
     it('persists the ban to the database', function () {
         $user = banUser();
-        $ban  = $user->ban(['reason' => 'db check']);
+        $ban = $user->ban(['reason' => 'db check']);
 
         expect(Ban::find($ban->id))->not->toBeNull()
             ->and(Ban::count())->toBe(1);
@@ -113,7 +114,7 @@ describe('ban() basics', function () {
         Event::fake([ModelBanned::class]);
 
         $user = banUser();
-        $ban  = $user->ban(['reason' => 'event test']);
+        $ban = $user->ban(['reason' => 'event test']);
 
         Event::assertDispatched(ModelBanned::class, function (ModelBanned $e) use ($user, $ban) {
             return $e->bannable->is($user) && $e->ban->is($ban);
@@ -130,7 +131,7 @@ describe('ban() basics', function () {
     });
 
     it('returns null on recursive call (lock guard)', function () {
-        $user   = banUser();
+        $user = banUser();
         $result = null;
 
         // This listener fires synchronously inside ban(), while the lock is still held.
@@ -152,11 +153,12 @@ describe('ban() basics', function () {
         // Warm the cache by calling isBanned()
         expect($user->isBanned())->toBeTrue();
 
-        // Remove all ban records from the database
-        Ban::withTrashed()->forceDelete();
+        $connection = $user->getConnection();
+        $connection->enableQueryLog();
+        $connection->flushQueryLog();
 
-        // Cache should still report banned (result was cached)
-        expect($user->isBanned())->toBeTrue();
+        expect($user->isBanned())->toBeTrue()
+            ->and($connection->getQueryLog())->toBe([]);
     });
 
 });
@@ -176,7 +178,7 @@ describe('AlreadyBannedException', function () {
     });
 
     it('exception has correct $existingBan property', function () {
-        $user     = banUser();
+        $user = banUser();
         $firstBan = $user->ban(['reason' => 'first ban']);
 
         $caught = null;
@@ -260,7 +262,7 @@ describe('unban() basics', function () {
 
     it('sets status = cancelled on the active ban (does NOT delete the record)', function () {
         $user = banUser();
-        $ban  = $user->ban(['reason' => 'to cancel']);
+        $ban = $user->ban(['reason' => 'to cancel']);
 
         $user->unban();
 
@@ -271,7 +273,7 @@ describe('unban() basics', function () {
 
     it('does not hard-delete the ban record', function () {
         $user = banUser();
-        $ban  = $user->ban(['reason' => 'to remove']);
+        $ban = $user->ban(['reason' => 'to remove']);
 
         $user->unban();
 
@@ -382,7 +384,7 @@ describe('isBanned()', function () {
 
     it('returns false for a cancelled ban', function () {
         $user = banUser();
-        $ban  = $user->ban(['reason' => 'cancelled']);
+        $ban = $user->ban(['reason' => 'cancelled']);
 
         $ban->update(['status' => BanStatus::CANCELLED->value]);
 
@@ -481,9 +483,9 @@ describe('BanStatus enum', function () {
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'permanent active',
-            'status'        => BanStatus::ACTIVE->value,
+            'bannable_id' => $user->getKey(),
+            'reason' => 'permanent active',
+            'status' => BanStatus::ACTIVE->value,
         ]);
 
         $active = Ban::active()->get();
@@ -497,10 +499,10 @@ describe('BanStatus enum', function () {
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'future expiry',
-            'status'        => BanStatus::ACTIVE->value,
-            'expired_at'    => now()->addDay(),
+            'bannable_id' => $user->getKey(),
+            'reason' => 'future expiry',
+            'status' => BanStatus::ACTIVE->value,
+            'expired_at' => now()->addDay(),
         ]);
 
         expect(Ban::active()->count())->toBe(1);
@@ -511,10 +513,10 @@ describe('BanStatus enum', function () {
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'past expiry',
-            'status'        => BanStatus::ACTIVE->value,
-            'expired_at'    => now()->subSecond(),
+            'bannable_id' => $user->getKey(),
+            'reason' => 'past expiry',
+            'status' => BanStatus::ACTIVE->value,
+            'expired_at' => now()->subSecond(),
         ]);
 
         expect(Ban::active()->count())->toBe(0);
@@ -525,9 +527,9 @@ describe('BanStatus enum', function () {
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'cancelled',
-            'status'        => BanStatus::CANCELLED->value,
+            'bannable_id' => $user->getKey(),
+            'reason' => 'cancelled',
+            'status' => BanStatus::CANCELLED->value,
         ]);
 
         expect(Ban::active()->count())->toBe(0);
@@ -538,16 +540,16 @@ describe('BanStatus enum', function () {
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'active ban',
-            'status'        => BanStatus::ACTIVE->value,
+            'bannable_id' => $user->getKey(),
+            'reason' => 'active ban',
+            'status' => BanStatus::ACTIVE->value,
         ]);
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'cancelled ban',
-            'status'        => BanStatus::CANCELLED->value,
+            'bannable_id' => $user->getKey(),
+            'reason' => 'cancelled ban',
+            'status' => BanStatus::CANCELLED->value,
         ]);
 
         $cancelled = Ban::cancelled()->get();
@@ -561,9 +563,9 @@ describe('BanStatus enum', function () {
 
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'active only',
-            'status'        => BanStatus::ACTIVE->value,
+            'bannable_id' => $user->getKey(),
+            'reason' => 'active only',
+            'status' => BanStatus::ACTIVE->value,
         ]);
 
         expect(Ban::cancelled()->count())->toBe(0);
@@ -579,7 +581,7 @@ describe('syncBan()', function () {
 
     it('creates a new ban when none exists', function () {
         $user = banUser();
-        $ban  = $user->syncBan(['reason' => 'first sync']);
+        $ban = $user->syncBan(['reason' => 'first sync']);
 
         expect($ban)->toBeInstanceOf(Ban::class)
             ->and($ban->reason)->toBe('first sync')
@@ -601,7 +603,7 @@ describe('syncBan()', function () {
         $user->syncBan(['expired_at' => now()->addDay()]);
 
         $newExpiry = now()->addDays(7);
-        $synced    = $user->syncBan(['expired_at' => $newExpiry]);
+        $synced = $user->syncBan(['expired_at' => $newExpiry]);
 
         expect(Ban::count())->toBe(1)
             ->and($synced->expired_at->toDateString())->toBe($newExpiry->toDateString());
@@ -671,10 +673,10 @@ describe('syncBan()', function () {
         // Insert an expired ban directly (bypassing AlreadyBannedException)
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'old expired',
-            'status'        => BanStatus::ACTIVE->value,
-            'expired_at'    => now()->subHour(),
+            'bannable_id' => $user->getKey(),
+            'reason' => 'old expired',
+            'status' => BanStatus::ACTIVE->value,
+            'expired_at' => now()->subHour(),
         ]);
 
         $ban = $user->syncBan(['reason' => 'fresh ban']);
@@ -684,7 +686,7 @@ describe('syncBan()', function () {
     });
 
     it('returns null on recursive call (lock guard)', function () {
-        $user   = banUser();
+        $user = banUser();
         $result = null;
 
         Event::listen(ModelBanned::class, function (ModelBanned $event) use (&$result) {

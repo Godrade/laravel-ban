@@ -4,44 +4,59 @@ declare(strict_types=1);
 
 namespace Godrade\LaravelBan\Models;
 
+use Godrade\LaravelBan\Enums\BanStatus;
+use Godrade\LaravelBan\Support\BanCache;
+use Godrade\LaravelBan\Traits\HasConfigurableSoftDeletes;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Carbon;
-use Godrade\LaravelBan\Enums\BanStatus;
 
 /**
- * @property int                  $id
- * @property string               $bannable_type
- * @property int                  $bannable_id
- * @property string|null          $created_by_type
- * @property int|null             $created_by_id
- * @property string|null          $cause_type
- * @property int|null             $cause_id
- * @property string|null          $feature
- * @property string|null          $reason
- * @property BanStatus            $status
- * @property Carbon|null          $expired_at
- * @property Carbon               $created_at
- * @property Carbon               $updated_at
- * @property Carbon|null          $deleted_at
+ * @property int $id
+ * @property string $bannable_type
+ * @property int $bannable_id
+ * @property string|null $created_by_type
+ * @property int|null $created_by_id
+ * @property string|null $cause_type
+ * @property int|null $cause_id
+ * @property string|null $feature
+ * @property string|null $reason
+ * @property BanStatus $status
+ * @property Carbon|null $expired_at
+ * @property Carbon $created_at
+ * @property Carbon $updated_at
+ * @property Carbon|null $deleted_at
  *
  * @method static Builder active()
  * @method static Builder cancelled()
- * @method static Builder withStatus(string|\UnitEnum $status)
+ * @method static Builder withStatus(string|\BackedEnum $status)
  * @method static Builder forFeature(string $feature)
  * @method static Builder global()
  */
 final class Ban extends Model
 {
-    use MassPrunable, SoftDeletes;
+    use HasConfigurableSoftDeletes, MassPrunable;
 
     protected $guarded = [];
 
+    public function __construct(array $attributes = [])
+    {
+        $this->attributes['status'] = BanStatus::from(config('ban.statuses.default', 'active'))->value;
+
+        parent::__construct($attributes);
+    }
+
+    protected static function booted(): void
+    {
+        self::saved(fn (self $ban) => BanCache::changed($ban));
+        self::deleted(fn (self $ban) => BanCache::changed($ban));
+        self::restored(fn (self $ban) => BanCache::changed($ban));
+    }
+
     protected $casts = [
-        'status'     => BanStatus::class,
+        'status' => BanStatus::class,
         'expired_at' => 'datetime',
     ];
 
@@ -71,7 +86,8 @@ final class Ban extends Model
     /** Whether this ban has not yet expired and has not been cancelled. */
     public function isActive(): bool
     {
-        return $this->status === BanStatus::ACTIVE
+        return ! $this->trashed()
+            && $this->status === BanStatus::ACTIVE
             && ($this->expired_at === null || $this->expired_at->isFuture());
     }
 
@@ -82,7 +98,7 @@ final class Ban extends Model
      */
     public function prunable(): Builder
     {
-        return static::where('expired_at', '<', now()->subDays(30));
+        return self::where('expired_at', '<', now()->subDays(30));
     }
 
     /** Scope: only bans that are currently active (status = ACTIVE and not expired). */
@@ -92,7 +108,7 @@ final class Ban extends Model
             ->where('status', BanStatus::ACTIVE->value)
             ->where(function (Builder $q): void {
                 $q->whereNull('expired_at')
-                  ->orWhere('expired_at', '>', now());
+                    ->orWhere('expired_at', '>', now());
             });
     }
 
@@ -103,9 +119,9 @@ final class Ban extends Model
     }
 
     /** Scope: filter by an arbitrary status value or BanStatus enum case. */
-    public function scopeWithStatus(Builder $query, string|\UnitEnum $status): Builder
+    public function scopeWithStatus(Builder $query, string|\BackedEnum $status): Builder
     {
-        $value = $status instanceof \UnitEnum ? $status->value : $status;
+        $value = $status instanceof \BackedEnum ? $status->value : $status;
 
         return $query->where('status', $value);
     }

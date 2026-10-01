@@ -2,7 +2,9 @@
 
 Un package Laravel complet, performant et hautement configurable pour gérer les bans d'utilisateurs et d'adresses IP.
 
-**Compatibilité :** PHP 8.2+ · Laravel 11 / 12 / 13 · PSR-4 · TALL Stack ready
+**Compatibilité :** Laravel 11 / 12 / 13, avec la version PHP requise par Laravel (PHP 8.2 minimum pour le package). Intégration optionnelle avec Livewire 3 ou 4.
+
+Au 1er octobre 2026, Laravel 11 reste déclaré compatible, mais des dépendances de cet environnement présentent des avis de sécurité amont non corrigés : Composer bloque leur installation normale. Les jobs de compatibilité Laravel 11 autorisent cette installation uniquement dans la CI isolée pour tester l'existant. Le job de qualité sur les versions récentes conserve le blocage de sécurité et l'audit Composer strict.
 
 ---
 
@@ -57,7 +59,7 @@ Un package Laravel complet, performant et hautement configurable pour gérer les
 composer require godrade/laravel-ban
 ```
 
-Le package est auto-découvert via Laravel Package Auto-Discovery. Aucune inscription manuelle dans `config/app.php` n'est nécessaire.
+Le package est auto-découvert via Laravel Package Auto-Discovery. Aucune inscription manuelle du service provider n'est nécessaire. Livewire n'est pas requis pour les bans, middleware, directives Blade ou commandes.
 
 ### Publier la configuration
 
@@ -73,6 +75,8 @@ php artisan ban:config --migrations
 
 ### Lancer les migrations
 
+Choisissez les noms des tables et la valeur de `ban.soft_delete` avant la première migration. Les migrations du package sont chargées automatiquement ; leur publication est optionnelle.
+
 ```bash
 php artisan migrate
 ```
@@ -83,6 +87,14 @@ Deux tables sont créées :
 |---|---|
 | `bans` | Bans polymorphiques sur n'importe quel modèle |
 | `banned_ips` | Bans d'adresses IP (IPv4 & IPv6) |
+
+### Mise à jour d'une installation existante
+
+Après la mise à jour du package, exécutez `php artisan migrate`. La migration `2026_10_01_000003_allow_multiple_bans_per_ip.php` remplace l'unicité de `ip_address` par un index simple et normalise les adresses IPv6 existantes. Plusieurs fonctionnalités ou enregistrements historiques peuvent ainsi partager la même IP.
+
+Le rollback de cette migration conserve volontairement l'index non unique et les IP normalisées : rétablir l'unicité pourrait échouer sur les nouveaux enregistrements. Il ne supprime aucune donnée pour rendre ce retour arrière possible.
+
+Le cache utilisateur change de format : les anciennes clés ne sont plus consultées et expirent suivant leur TTL. L'intégration Livewire renvoie désormais HTTP 403 pour une action interdite ; `checkBanLock()` est un helper protégé à appeler depuis le composant. `syncBan()` conserve les champs omis lors d'une mise à jour et n'efface que les champs explicitement passés à `null`.
 
 ---
 
@@ -122,7 +134,7 @@ return [
     // Noms de relations réservés (ne peuvent pas être écrasés)
     'reserved_relations' => ['bannable', 'createdBy', 'cause'],
 
-    // Conserver un historique des bans (soft delete)
+    // Suppression logique (choisir avant les migrations)
     'soft_delete' => true,
 
     // Valeurs de statut utilisées sur la colonne `status` de la table bans
@@ -141,6 +153,10 @@ BAN_CACHE_TTL=3600
 BAN_REDIRECT_URL=login
 BAN_ALLOW_OVERLAPPING=false
 ```
+
+Avec `soft_delete=true`, `delete()` conserve les lignes via `deleted_at`. Avec `false`, les migrations omettent cette colonne, les requêtes ne la consultent pas et `delete()` supprime définitivement les lignes. `restore()` retourne alors `false`. Cette option concerne `Ban` et `BannedIp` ; `unban()` conserve toujours l'historique en passant le statut à `cancelled`.
+
+Ne changez pas `soft_delete` sur une base existante sans migration adaptée au schéma et à l'historique déjà présent.
 
 ---
 
@@ -197,7 +213,7 @@ $user->ban([
 ]);
 ```
 
-`ban()` retourne l'instance `Ban` créée, ou `null` si la méthode a été appelée récursivement (le verrou statique était déjà actif pour cette instance) :
+`ban()` retourne l'instance `Ban` créée avec son statut immédiatement disponible, ou `null` en cas de réentrée pour le même modèle. Le modèle doit déjà être enregistré en base :
 
 ```php
 $ban = $user->ban(['reason' => 'Test']);
@@ -241,19 +257,9 @@ try {
 }
 ```
 
-**Workflow conseillé :**
-```php
-if (! $user->isBanned()) {
-    $user->ban(['reason' => 'Violation CGU']);
-}
+Les mutations passent par une transaction et un verrou sur la ligne du modèle banni, y compris lorsqu'aucun ban n'existe encore. Deux appels concurrents à l'API du package ne doivent donc pas créer deux bans sur le même scope lorsque les doublons sont désactivés. Sur SQLite, le package acquiert un verrou d'écriture.
 
-// Ou attraper l'exception pour afficher un message à l'admin
-try {
-    $user->ban(['reason' => 'Récidive']);
-} catch (AlreadyBannedException $e) {
-    return back()->with('error', "Cet utilisateur est déjà banni. Ban actif : #{$e->existingBan->id}");
-}
-```
+Interceptez `AlreadyBannedException` pour afficher le ban existant à l'administrateur. Une vérification préalable avec `isBanned()` ne remplace pas cette gestion : un autre processus peut bannir le modèle entre la vérification et l'écriture. Les insertions SQL directes ne passent pas par ce verrou.
 
 **Inspecter le ban existant via l'exception :**
 ```php
@@ -307,7 +313,7 @@ $user->unban('forum');
 
 ### syncBan — upsert idempotent
 
-`syncBan()` est une alternative à `ban()` qui **ne lève jamais `AlreadyBannedException`**. Elle met à jour le ban actif existant sur le même scope ou en crée un nouveau, ce qui la rend parfaite pour les tâches planifiées, les webhooks et les imports.
+`syncBan()` est une alternative à `ban()` qui **ne lève jamais `AlreadyBannedException`**. Elle met à jour le ban actif existant sur le même scope ou en crée un nouveau, ce qui convient aux tâches planifiées, webhooks et imports.
 
 ```php
 // Crée un ban si aucun ban actif n'existe
@@ -316,14 +322,21 @@ $user->syncBan(['reason' => 'Violation CGU', 'expired_at' => now()->addDays(7)])
 // Met à jour le ban actif existant (même scope global)
 $user->syncBan(['reason' => 'Récidive', 'expired_at' => now()->addDays(30)]);
 
-// Feature-scoped — indépendant du scope global
+// Conserve la durée et l'auteur existants ; modifie seulement la raison
+$user->syncBan(['reason' => 'Motif précisé']);
+
+// null explicite efface le champ : ici le ban devient permanent
+$user->syncBan(['expired_at' => null]);
+
+// Scope comments, indépendant du scope global
 $user->syncBan(['feature' => 'comments', 'reason' => 'Commentaires offensants']);
 ```
 
 | Situation | Comportement |
 |---|---|
 | Aucun ban actif sur ce scope | Crée un nouveau ban + dispatche `ModelBanned` |
-| Ban actif existant sur ce scope | Met à jour `reason`, `expired_at`, `created_by` |
+| Ban actif existant sur ce scope | Met à jour uniquement les champs fournis parmi `reason`, `expired_at`, `created_by`, `cause` |
+| Champ omis / champ passé à `null` | Conserve sa valeur / efface sa valeur |
 | Ban expiré sur ce scope | Crée un nouveau ban |
 | `allow_overlapping_bans` peu importe | Jamais d'`AlreadyBannedException` |
 
@@ -333,7 +346,9 @@ $user->syncBan(['feature' => 'comments', 'reason' => 'Commentaires offensants'])
 
 ### CheckBanned
 
-Redirige automatiquement les utilisateurs bannis vers l'URL configurée dans `ban.redirect_url`.
+Pour un utilisateur authentifié implémentant `Bannable`, vérifie le ban global ou le scope demandé. Les invités et modèles sans ce contrat passent ce middleware ; utilisez également `auth` pour imposer l'authentification.
+
+Une requête qui attend du JSON reçoit HTTP 403 avec `{"message":"Your account has been suspended."}` (message traduisible). Une requête web est redirigée vers `ban.redirect_url`, qui accepte un nom de route, une URL absolue ou un chemin commençant par `/`. Si la route n'existe pas ou si la destination est la page courante, le middleware répond HTTP 403 pour éviter une erreur ou une boucle de redirection.
 
 #### Protection globale
 
@@ -354,7 +369,7 @@ Route::middleware(['auth', 'banned:comments'])->group(function () {
 
 #### Message flash
 
-La redirection inclut un message flash `ban_error` :
+Si la requête possède une session, la redirection inclut un message flash `ban_error` :
 
 ```blade
 @if (session('ban_error'))
@@ -368,7 +383,9 @@ La redirection inclut un message flash `ban_error` :
 
 Bloque les requêtes provenant d'une adresse IP bannie avec une réponse **HTTP 403**.
 
-Le résultat de la vérification est **mémoïsé** dans une propriété statique : une seule requête SQL est exécutée par IP et par cycle de requête, même si le middleware est appelé plusieurs fois dans la même pipeline.
+Le middleware et `@bannedIp` partagent une mémoïsation attachée à l'objet HTTP `Request`. Une combinaison IP/scope déjà vérifiée ne relance pas de requête SQL tant que le résultat reste valide. Une expiration ou une mutation Eloquent le rend à nouveau vérifiable ; dans une transaction, les vérifications consultent directement la base.
+
+Sans scope, `ban.ip` bloque toute IP ayant au moins un ban actif, même associé à une fonctionnalité. Avec `ban.ip:api`, seuls les bans globaux et les bans `api` sont pris en compte.
 
 #### Protection globale (toutes les routes)
 
@@ -379,13 +396,24 @@ Route::middleware('ban.ip')->group(function () {
 });
 ```
 
-Ou dans `app/Http/Kernel.php` pour l'appliquer globalement :
+Pour l'appliquer globalement dans Laravel 11+, ajoutez-le au callback `withMiddleware` de `bootstrap/app.php` :
 
 ```php
-protected $middleware = [
-    \Godrade\LaravelBan\Middleware\BlockBannedIp::class,
-    // ...
-];
+// bootstrap/app.php
+use Godrade\LaravelBan\Middleware\BlockBannedIp;
+use Illuminate\Foundation\Application;
+use Illuminate\Foundation\Configuration\Middleware;
+
+return Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
+    ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->append(BlockBannedIp::class);
+    })
+    ->create();
 ```
 
 #### Protection par feature
@@ -421,24 +449,17 @@ BannedIp::create([
 ]);
 ```
 
-#### Reset du cache (Laravel Octane)
+#### Cycle de vie du cache IP
 
-En environnement long-running (Octane, Swoole), réinitialisez le cache statique entre chaque requête :
+Aucune réinitialisation manuelle entre requêtes n'est nécessaire sous Octane ou Swoole. Les résultats ne sont pas réutilisés d'un objet `Request` à l'autre.
 
-```php
-// AppServiceProvider::boot()
-$this->app->make(\Illuminate\Contracts\Http\Kernel::class)
-    ->pushMiddleware(function ($request, $next) {
-        \Godrade\LaravelBan\Middleware\BlockBannedIp::flushCache();
-        return $next($request);
-    });
-```
+Les créations, mises à jour, suppressions et restaurations d'instances `BannedIp` invalident la mémoïsation. Après une requête SQL en masse qui contourne les événements Eloquent, utilisez `BlockBannedIp::flushCache()` si vous revérifiez une IP dans la même requête.
 
 ---
 
 ## Directives Blade
 
-Toutes les directives acceptent un modèle optionnel. Si omis, l'utilisateur connecté (`auth()->user()`) est utilisé.
+Les directives de ban utilisateur acceptent un modèle `Bannable` optionnel. Si omis, l'utilisateur connecté (`auth()->user()`) est utilisé. `@bannedIp` prend une adresse IP et un scope.
 
 ### `@banned` / `@notBanned`
 
@@ -510,14 +531,7 @@ Vérifie si l'adresse IP courante (ou une IP explicite) est bannie.
 @endbannedIp
 ```
 
-> **Performance :** le résultat de chaque combinaison `{ip}:{feature}` est mémoïsé pour la durée de la requête. Une seule requête SQL est exécutée par IP/feature, même si la directive est utilisée plusieurs fois dans la même vue.
-
-#### Reset du cache IP (Laravel Octane)
-
-```php
-// AppServiceProvider::boot()
-\Godrade\LaravelBan\Blade\BanDirectives::flushIpCache();
-```
+Le résultat est partagé avec `BlockBannedIp` pendant la requête courante, par IP et scope. Les expirations sont prises en compte. Après une modification en masse, `Godrade\LaravelBan\Blade\BanDirectives::flushIpCache()` invalide cette mémoïsation commune ; aucun reset Octane n'est nécessaire entre les requêtes.
 
 ---
 
@@ -581,105 +595,104 @@ Affiche le bloc uniquement si le modèle est banni de **toutes** les features pa
 
 ## Intégration Livewire
 
-Le package fournit un système de **verrouillage déclaratif** pour les composants Livewire via un attribut PHP 8.2 et un trait d'interception.
+L'intégration est **optionnelle et compatible uniquement avec Livewire 3 ou 4**. Si votre application utilise Livewire, installez une version supportée :
+
+```bash
+composer require 'livewire/livewire:^3.0|^4.0'
+```
+
+Le service provider enregistre automatiquement le contrôle lorsque Livewire est disponible. Aucune interception manuelle des actions n'est nécessaire.
 
 ### Attribut `#[LockedByBan]`
 
-L'attribut `#[LockedByBan]` peut être placé sur une **méthode** ou sur une **classe** entière.
-
-```php
-use Godrade\LaravelBan\Attributes\LockedByBan;
-```
-
 | Cible | Comportement |
 |---|---|
-| Méthode | Seule cette méthode est bloquée si l'utilisateur est banni |
-| Classe | Toutes les méthodes du composant sont bloquées |
-| `feature: 'xxx'` | Le blocage ne s'active que si l'utilisateur est banni de cette feature |
+| Méthode | Protège cette action et les événements qui l'appellent |
+| Classe | Protège les actions distantes du composant |
+| Sans `feature` | Vérifie le ban global |
+| `feature: 'comments'` | Vérifie le ban global et celui de `comments` |
 
-**Priorité :** un attribut méthode prend toujours le dessus sur un attribut classe (pour le scope feature).
-
----
+Un attribut de méthode prend la priorité sur l'attribut de classe pour le scope. Les méthodes héritées conservent leur attribut ; pour une classe sans attribut propre, le package utilise celui du parent le plus proche.
 
 ### Trait `InterceptsBans`
 
-Ajoutez ce trait à votre composant Livewire pour activer l'interception automatique :
+Ajoutez le trait et les attributs au composant :
 
 ```php
+namespace App\Livewire;
+
 use Godrade\LaravelBan\Attributes\LockedByBan;
 use Godrade\LaravelBan\Traits\InterceptsBans;
+use Livewire\Attributes\On;
+use Livewire\Component;
 
-class CommentComponent extends \Livewire\Component
+#[LockedByBan(feature: 'forum')]
+class ForumComponent extends Component
 {
     use InterceptsBans;
 
-    // Bloqué si l'utilisateur est banni globalement
-    #[LockedByBan]
+    public function postThread(): void
+    {
+        // Protégé par le scope forum de la classe.
+    }
+
+    #[On('comment:post')]
+    #[LockedByBan(feature: 'comments')]
     public function postComment(): void
     {
-        // ...
+        // Protégé par comments, y compris lors d'un événement comment:post.
     }
 
-    // Bloqué uniquement si l'utilisateur est banni de la feature 'comments'
-    #[LockedByBan(feature: 'comments')]
-    public function editComment(int $id): void
+    public function render(): string
     {
-        // ...
+        return '<div><button wire:click="postThread">Publier</button></div>';
     }
-
-    // Jamais bloqué
-    public function loadComments(): void
-    {
-        // ...
-    }
-}
-```
-
-#### Verrou sur toute la classe
-
-```php
-// Tous les appels de méthode sont bloqués si l'utilisateur est banni du forum
-#[LockedByBan(feature: 'forum')]
-class ForumComponent extends \Livewire\Component
-{
-    use InterceptsBans;
-
-    public function postThread(): void { /* ... */ }
-    public function deleteThread(): void { /* ... */ }
 }
 ```
 
 #### Comportement lors du blocage
 
-Quand un appel est intercepté, le package :
-1. **Retourne `null`** — Livewire n'exécute pas la méthode
-2. **Flashe `ban_error`** en session — affichez-le dans votre vue
+Le package interrompt la requête avec **HTTP 403 avant l'exécution de l'action ou du listener** et flashe `ban_error` en session. La réponse d'erreur ne provoque pas un nouveau rendu du composant ; gérez-la avec le traitement des erreurs Livewire de votre application. Le message flash reste utilisable sur une page rendue ensuite.
 
-```blade
-@if (session('ban_error'))
-    <div class="text-red-500">{{ session('ban_error') }}</div>
-@endif
-```
+Le trait n'ajoute aucun `callMethod()` public. Les méthodes privées et le helper protégé `checkBanLock()` ne deviennent pas des actions distantes.
 
-#### Livewire v3 — hooks manuels
+#### Appels internes et hooks de cycle de vie
 
-En Livewire v3, vous pouvez appeler `checkBanLock()` directement dans un hook :
+Les contrôles automatiques concernent les actions reçues de Livewire et les listeners, qu'ils soient déclarés avec `#[On]` ou `$listeners`. Les appels PHP internes et les hooks tels que `mount()`, `boot()` ou `updated()` ne passent pas par ce contrôle. Les changements de propriétés via `wire:model` ne constituent pas des actions protégées par cet attribut.
+
+Pour un appel interne, vérifiez le lock avant l'effet à protéger et retournez si le helper indique un blocage :
 
 ```php
-use Livewire\Attributes\On;
+namespace App\Livewire;
 
-class CommentComponent extends \Livewire\Component
+use Godrade\LaravelBan\Attributes\LockedByBan;
+use Godrade\LaravelBan\Traits\InterceptsBans;
+use Livewire\Component;
+
+class CommentComponent extends Component
 {
     use InterceptsBans;
 
-    #[On('comment:post')]
-    public function postComment(): void
+    public string $draft = '';
+
+    public function updatedDraft(): void
     {
-        if ($this->checkBanLock('postComment')) {
+        if ($this->checkBanLock('saveDraft')) {
             return;
         }
 
-        // logique métier...
+        $this->saveDraft();
+    }
+
+    #[LockedByBan(feature: 'comments')]
+    protected function saveDraft(): void
+    {
+        // Enregistrer le brouillon après le contrôle.
+    }
+
+    public function render(): string
+    {
+        return '<div><input wire:model.live="draft"></div>';
     }
 }
 ```
@@ -688,13 +701,14 @@ class CommentComponent extends \Livewire\Component
 
 | Situation | Résultat |
 |---|---|
-| Pas d'attribut `#[LockedByBan]` sur la méthode ni la classe | ✅ Méthode exécutée |
-| Utilisateur non authentifié | ✅ Méthode exécutée |
-| Modèle sans trait `HasBans` | ✅ Méthode exécutée |
-| Utilisateur banni globalement + lock sans feature | 🚫 Bloqué |
-| Utilisateur banni globalement + lock avec feature | 🚫 Bloqué (global ⊇ toutes features) |
-| Utilisateur banni de la feature X + lock sur feature X | 🚫 Bloqué |
-| Utilisateur banni de la feature X + lock sur feature Y | ✅ Méthode exécutée |
+| Composant sans `InterceptsBans` | Aucun contrôle automatique |
+| Pas d'attribut méthode ni classe | Action autorisée par le package |
+| Invité ou utilisateur sans contrat `Bannable` | Action autorisée par le package |
+| Ban global et action verrouillée | HTTP 403 |
+| Ban de feature X et lock sur X | HTTP 403 |
+| Ban de feature X et lock sur Y | Action autorisée par le package |
+
+Ces locks ne remplacent pas les règles d'authentification et d'autorisation de l'application.
 
 ---
 
@@ -724,9 +738,11 @@ php artisan ban:user 5 --model="App\Models\Shop" --reason="Fraude"
 |---|---|
 | `id` | *(requis)* Clé primaire du modèle |
 | `--model` | Classe du modèle (défaut : `App\Models\User`) |
-| `--duration` | Durée en minutes (omis = permanent) |
+| `--duration` | Nombre entier strictement positif de minutes (omis = permanent) |
 | `--reason` | Raison lisible du ban |
 | `--feature` | Scope la restriction à une feature |
+
+Une durée telle que `1h`, `0` ou `-10` est refusée : la commande retourne un code d'échec sans créer de ban. Un doublon actif retourne également une erreur lisible. Le modèle doit implémenter `Bannable`.
 
 ---
 
@@ -746,7 +762,7 @@ php artisan ban:config --migrations
 
 ### `ban:list`
 
-Affiche un tableau de tous les bans enregistrés.
+Affiche les bans actifs par défaut. `--status=cancelled` affiche les bans annulés, quelle que soit leur expiration, sans devoir ajouter `--expired`. Les enregistrements supprimés logiquement restent exclus.
 
 ```bash
 # Tous les bans actifs
@@ -755,8 +771,11 @@ php artisan ban:list
 # Filtrés par feature
 php artisan ban:list --feature=comments
 
-# Inclure aussi les bans expirés
+# Inclure tous les statuts et les bans expirés
 php artisan ban:list --expired
+
+# Uniquement le statut active, y compris les bans déjà expirés
+php artisan ban:list --status=active --expired
 
 # Filtrés par type de modèle
 php artisan ban:list --model="App\Models\User"
@@ -771,8 +790,8 @@ php artisan ban:list --status=cancelled
 | Option | Description |
 |---|---|
 | `--feature=` | Filtre par feature (scope) |
-| `--expired` | Inclut les bans expirés dans le résultat |
-| `--model=` | Filtre par classe Eloquent bannable |
+| `--expired` | Inclut tous les statuts et expirations, sauf filtre `--status` explicite |
+| `--model=` | Classe Eloquent bannable ou alias enregistré dans la morph map |
 | `--status=active\|cancelled` | Filtre par statut du ban |
 
 **Colonnes affichées :** `ID · Bannable Type · Bannable ID · Feature · Reason · Status · Expires at · Created at`
@@ -802,7 +821,7 @@ php artisan ban:remove 42 --no-confirm
 | `--force` | Suppression permanente (ignore le soft-delete) |
 | `--no-confirm` | Ne demande pas de confirmation |
 
-Le cache du modèle banni est **automatiquement invalidé** après la suppression.
+Le cache du modèle banni est automatiquement invalidé après la suppression, y compris lorsque `bannable_type` contient un alias de morph map. Avec `soft_delete=false`, la suppression est définitive même sans `--force`.
 
 ---
 
@@ -816,26 +835,36 @@ Le cache du modèle banni est **automatiquement invalidé** après la suppressio
 | `Godrade\LaravelBan\Events\ModelUnbanned` | `unban()` annule des bans actifs (status → CANCELLED) |
 | `Godrade\LaravelBan\Events\ModelBanUpdated` | `syncBan()` met à jour un ban actif existant |
 
+Les événements du package sont émis **après le commit de la transaction**, avec le cache invalidé avant leur émission. Dans une transaction englobante, ils attendent son commit ; un rollback ne les émet pas. Les listeners voient le statut du ban immédiatement disponible. Une modification directe d'une instance `Ban` invalide le cache via les événements Eloquent, sans émettre ces événements métier.
+
 ### Écoute des événements
 
-```php
-use Godrade\LaravelBan\Events\ModelBanned;
-use Godrade\LaravelBan\Events\ModelBanUpdated;
-use Godrade\LaravelBan\Events\ModelUnbanned;
+Exemple dans `app/Providers/AppServiceProvider.php` :
 
-protected $listen = [
-    ModelBanned::class => [
-        App\Listeners\NotifyAdminOnBan::class,
-        App\Listeners\LogBanActivity::class,
-    ],
-    ModelBanUpdated::class => [
-        App\Listeners\LogBanChange::class,
-    ],
-    ModelUnbanned::class => [
-        App\Listeners\NotifyUserOnUnban::class,
-    ],
-];
+```php
+namespace App\Providers;
+
+use Godrade\LaravelBan\Events\ModelBanned;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        Event::listen(ModelBanned::class, function (ModelBanned $event): void {
+            Log::info('Ban créé', [
+                'ban_id' => $event->ban->id,
+                'feature' => $event->feature,
+                'status' => $event->ban->status->value,
+            ]);
+        });
+    }
+}
 ```
+
+Enregistrez `ModelBanUpdated` et `ModelUnbanned` de la même manière pour écouter les mises à jour et annulations.
 
 ### Payload
 
@@ -848,7 +877,7 @@ $event->feature;  // feature ciblée (null = global) — raccourci vers $event->
 // ModelBanUpdated
 $event->bannable;            // modèle dont le ban a été mis à jour
 $event->ban;                 // instance Ban après la mise à jour
-$event->originalAttributes;  // attributs avant la mise à jour (tableau brut)
+$event->originalAttributes;  // attributs Eloquent avant la mise à jour
 
 // ModelUnbanned
 $event->bannable; // modèle débanni
@@ -857,51 +886,63 @@ $event->feature;  // feature ciblée (null = global)
 
 ### Anti-récursion
 
-`HasBans` maintient un verrou statique par objet (`spl_object_hash`) pour empêcher toute récursion infinie si un listener d'événement rappelle `ban()`, `syncBan()` ou `unban()` sur la même instance :
+`HasBans` protège les réentrées selon l'identité en base du modèle (connexion, table, clé primaire), y compris lorsqu'un listener recharge une autre instance du même modèle. Un appel récursif à `ban()` ou `syncBan()` retourne `null` ; `unban()` ne lance pas de nouvelle mutation. Le verrou est libéré dans un bloc `finally`, même en cas d'exception.
 
-```php
-// Listener qui rappelle ban() → pas de boucle infinie
-class NotifyAdminOnBan
-{
-    public function handle(ModelBanned $event): void
-    {
-        // Si ceci appelle $event->bannable->ban(...), le verrou l'ignore proprement
-        // et retourne un Ban vide au lieu de boucler.
-        AuditLog::record($event->ban);
-    }
-}
-```
-
-> Le verrou est libéré dans un bloc `finally`, garantissant qu'il est toujours nettoyé même en cas d'exception.
+Cette protection des listeners complète le verrou transactionnel utilisé entre processus. Elle ne remplace pas une politique d'autorisation de vos écritures.
 
 ---
 
 ## Cache multi-driver
 
-Le package met en cache le résultat de `isBanned()` et `isBannedFrom()` pour éviter des requêtes SQL répétées. Le cache est **automatiquement invalidé** dès qu'un ban est créé, annulé ou mis à jour.
+Le cache conserve une réponse par **scope exact**. `isBanned()` consulte le scope global (`null`) ; `isBannedFrom('comments')` combine le résultat global avec celui de `comments`. Un changement de ban global prend donc effet pour chaque fonctionnalité sans conserver de résultat combiné périmé. La feature littérale `global` possède son propre scope distinct.
+
+La durée de validité est limitée par `ban.cache_ttl` **et par la prochaine expiration des bans concernés**. Une expiration ne nécessite pas une tâche planifiée pour être prise en compte.
+
+Les vérifications de bans utilisateur et IP lisent la connexion d'écriture (`useWritePdo()`). Avec une configuration de lecture sur réplique, un retard de réplication ne remplit donc pas le cache avec l'état antérieur à une mutation validée sur la base primaire.
 
 ### Choisir un driver
 
 ```dotenv
-BAN_CACHE_DRIVER=redis      # Redis
-BAN_CACHE_DRIVER=           # driver par défaut de l'application
+BAN_CACHE_DRIVER=redis
+BAN_CACHE_TTL=3600
 ```
 
-### Désactiver le cache
+Omettez `BAN_CACHE_DRIVER` pour utiliser le store par défaut de l'application. Mettez `BAN_CACHE_TTL=0` pour désactiver ce cache.
 
-```dotenv
-BAN_CACHE_TTL=0
+### Invalidation et transactions
+
+`ban()`, `syncBan()` et `unban()`, ainsi que les sauvegardes, suppressions et restaurations d'instances `Ban`, invalident les scopes concernés. Un changement de propriétaire ou de feature invalide l'ancien et le nouveau scope. Le package change la génération de cache pour qu'une lecture commencée avant l'invalidation ne puisse pas remettre en service un ancien résultat.
+
+À l'intérieur d'une transaction, les vérifications consultent la base sans lire ni alimenter le cache partagé. Les mutations invalident immédiatement le cache, puis à nouveau après commit pour écarter les résultats rechargés par une autre connexion entre-temps. Un rollback n'alimente pas le cache avec des données annulées.
+
+Les mises à jour en masse et le SQL brut contournent les événements Eloquent. Invalidez explicitement chaque modèle/scope affecté :
+
+```php
+use App\Models\User;
+use Godrade\LaravelBan\Enums\BanStatus;
+
+$user = User::findOrFail(42);
+
+$user->getConnection()->transaction(function () use ($user): void {
+    $user->bans()->where('feature', 'comments')->update([
+        'status' => BanStatus::CANCELLED->value,
+    ]);
+
+    $user->flushBanCache('comments');
+});
+
+// Sans argument, invalide uniquement le scope global.
+$user->flushBanCache();
 ```
 
 ### Format des clés
 
+```text
+<prefix>v2_<sha256>:version
+<prefix>v2_<sha256>:<generation>
 ```
-laravel_ban_{MorphClass}_{id}_{scope}
 
-# Exemples
-laravel_ban_App_Models_User_42_global
-laravel_ban_App_Models_User_42_comments
-```
+Le préfixe par défaut est `laravel_ban_`. Le hash SHA-256 porte sur la sérialisation PHP de la connexion, du nom de base, du préfixe de table, de la table des bans, du type polymorphique, de l'identifiant converti en chaîne et du scope (`null` ou nom de feature). La première clé contient une génération aléatoire ; la seconde contient le résultat et sa date limite de validité. Utilisez `flushBanCache()` pour invalider un résultat au lieu de reconstruire ces clés.
 
 ---
 
@@ -951,24 +992,31 @@ BanStatus::CANCELLED->value; // 'cancelled' — annulé via unban()
 
 ### Pruning automatique
 
-Le modèle `Ban` implémente `MassPrunable` : les bans expirés depuis plus de **30 jours** peuvent être supprimés en une seule commande SQL.
+Les modèles `Ban` et `BannedIp` utilisent `MassPrunable` pour supprimer définitivement les bans expirés depuis plus de **30 jours**. Indiquez les deux classes du package explicitement :
 
 ```bash
-php artisan model:prune --model="Godrade\LaravelBan\Models\Ban"
+php artisan model:prune \
+  --model='Godrade\LaravelBan\Models\Ban' \
+  --model='Godrade\LaravelBan\Models\BannedIp'
 ```
 
-**Planifier le nettoyage** dans `app/Console/Kernel.php` :
+Dans Laravel 11+, planifiez cette commande dans `routes/console.php` :
 
 ```php
-protected function schedule(Schedule $schedule): void
-{
-    $schedule->command('model:prune')->daily();
-}
+use Godrade\LaravelBan\Models\Ban;
+use Godrade\LaravelBan\Models\BannedIp;
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('model:prune', [
+    '--model' => [Ban::class, BannedIp::class],
+])->daily();
 ```
 
-> Seuls les bans avec `expired_at < now()->subDays(30)` sont ciblés. Les bans permanents (`expired_at = null`) et les bans récemment expirés sont préservés.
+L'application doit exécuter le scheduler Laravel. Les bans permanents (`expired_at = null`) et ceux expirés depuis moins de 30 jours sont préservés. Le pruning en masse n'émet pas d'événement Eloquent par enregistrement.
 
 ---
+
+### Relation cause (polymorphique)
 
 La relation `cause` lie un ban à **n'importe quel modèle déclencheur** (signalement, ticket de support, règle de modération…).
 
@@ -978,6 +1026,13 @@ La relation `cause` lie un ban à **n'importe quel modèle déclencheur** (signa
 | `cause_id` | `unsignedBigInteger\|null` | Clé primaire de la cause |
 
 ```php
+use App\Models\Report;
+use App\Models\User;
+use Godrade\LaravelBan\Models\Ban;
+
+$user = User::findOrFail(42);
+$report = Report::findOrFail(17);
+
 // Créer un ban lié à un signalement
 $ban = $user->ban([
     'reason' => 'Contenu offensant',
@@ -1000,8 +1055,8 @@ Ban::with('cause')->active()->get();
 Injectez des relations Eloquent supplémentaires sur `Ban` depuis `config/ban.php` sans modifier le modèle.
 
 ```php
-// config/ban.php
-'relations' => [
+// Bloc à ajouter à la configuration config/ban.php
+return ['relations' => [
     'preset' => [
         'type'        => 'belongsTo',
         'related'     => \App\Models\BanPreset::class,
@@ -1011,7 +1066,7 @@ Injectez des relations Eloquent supplémentaires sur `Ban` depuis `config/ban.ph
         'type'    => 'belongsTo',
         'related' => \App\Models\SupportTicket::class,
     ],
-],
+]];
 ```
 
 ```php
@@ -1019,39 +1074,43 @@ $ban->preset;                          // instance BanPreset
 Ban::with(['preset', 'ticket'])->get();
 ```
 
+Les types supportés sont `belongsTo`, `hasOne` et `hasMany`. Pour `belongsTo`, une clé étrangère omise est déduite du nom de relation (`ticket_id` dans cet exemple), et `owner_key` peut personnaliser la clé cible. Pour `hasOne` et `hasMany`, utilisez `local_key` pour personnaliser la clé locale. Ajoutez les colonnes nécessaires dans les migrations de votre application : cette configuration ne modifie pas le schéma.
+
 **Règles de validation au démarrage :**
 
 | Situation | Comportement |
 |---|---|
 | Nom réservé (`bannable`, `createdBy`, `cause`) | `Log::warning` + relation ignorée |
-| Classe `related` inexistante | `Log::error` + relation ignorée |
+| Définition invalide, classe non Eloquent ou type non supporté | `Log::error` + relation ignorée |
 | Configuration valide | Relation injectée via `resolveRelationUsing` |
 
 ---
 
 ### `BannedIp`
 
-`BannedIp` supporte le **pruning** via `MassPrunable` : les enregistrements dont `expired_at` est antérieur à 30 jours sont automatiquement supprimés par `php artisan model:prune`.
+`BannedIp` supporte le pruning avec sa classe explicitement passée à `model:prune`, comme dans la planification ci-dessus. Une même adresse peut porter plusieurs bans et conserver son historique après suppression logique.
 
-La colonne `feature` est limitée à **50 caractères** (cohérence avec la table `bans`).
+La colonne `feature` est limitée à **50 caractères**, comme dans la table `bans`. Les adresses IPv6 valides sont normalisées à l’écriture et lors de `forIp()` ; les écritures SQL brutes doivent respecter cette normalisation.
 
 `BannedIp` expose également une relation polymorphique `createdBy()` (`created_by_type` / `created_by_id`) pour enregistrer l'auteur du ban IP.
 
 ```php
+use App\Models\User;
 use Godrade\LaravelBan\Models\BannedIp;
 
-BannedIp::create([
+$admin = User::findOrFail(1);
+
+$ban = BannedIp::create([
     'ip_address' => '192.168.1.100',
     'reason'     => 'Attaque brute-force',
     'expired_at' => now()->addDays(30),
     'created_by' => $admin,   // relation polymorphique optionnelle
 ]);
 
-BannedIp::active()->forIp($request->ip())->exists();
-BannedIp::active()->forIp($request->ip())->forFeature('api')->exists();
+$ban->createdBy; // L'administrateur associé
 
-// Pruning automatique (à ajouter au scheduler)
-// $schedule->command('model:prune', ['--model' => \Godrade\LaravelBan\Models\BannedIp::class])->daily();
+BannedIp::active()->forIp('192.168.1.100')->exists();
+BannedIp::active()->forIp('192.168.1.100')->forFeature('api')->exists();
 ```
 
 ---
@@ -1059,18 +1118,64 @@ BannedIp::active()->forIp($request->ip())->forFeature('api')->exists();
 ## Tests
 
 ```bash
-./vendor/bin/pest
+composer install
+composer check
 ```
+
+`composer check` lance le contrôle de formatage Pint, l'analyse statique Larastan/PHPStan puis les tests Pest. Les commandes peuvent être lancées séparément avec `composer lint`, `composer analyse` et `composer test`. `composer format` applique le formatage.
 
 | Fichier | Couverture |
 |---|---|
-| `tests/Feature/DynamicRelationsTest.php` | Relations dynamiques, noms réservés, relation `cause` |
-| `tests/Feature/InterceptsBansTest.php` | `#[LockedByBan]` méthode / classe / feature, `BlockBannedIp`, mémoïsation |
-| `tests/Feature/MaintenanceTest.php` | `ban:list`, `ban:remove`, `syncBan()`, `MassPrunable` |
+| `tests/Feature/CoreBanTest.php` | API des bans, statuts, événements et réentrées |
+| `tests/Feature/BanCacheLifecycleTest.php` | Cache activé, expirations, scopes, mutations directes, transactions et invalidation |
+| `tests/Feature/PackageMigrationsTest.php` | Migrations réelles et configuration de suppression logique |
+| `tests/Feature/IpBanRegressionTest.php` | Mémoïsation par requête, IPv6, bans IP multiples et migration de mise à jour |
+| `tests/Feature/BlockBannedIpTest.php` | Middleware IP, scopes et expiration |
+| `tests/Feature/BladeDirectivesTest.php` | Directives Blade et contrats des modèles |
+| `tests/Feature/DynamicRelationsTest.php` | Relations dynamiques, clés déduites et relation `cause` |
+| `tests/Feature/InterceptsBansTest.php` | Vrais composants Livewire, actions, listeners, héritage et visibilité |
+| `tests/Feature/HttpAndConsoleTest.php` | Réponses JSON/web, commandes, filtres et validation |
+| `tests/Feature/MaintenanceTest.php` | Listing, suppression, synchronisation et pruning |
+| `tests/Feature/RelationalDatabaseTest.php` | Migrations, transactions, cache et concurrence sur MySQL/PostgreSQL ; activation explicite |
+
+### Tests MySQL et PostgreSQL
+
+La suite utilise SQLite par défaut. Pour lancer les tests relationnels, préparez une **base dédiée et jetable** et installez l'extension PHP `pdo_mysql` ou `pdo_pgsql`. Ces tests suppriment et recréent les tables `integration_users`, `integration_bans` et `integration_banned_ips` au démarrage, puis les suppriment à la fin : ne les dirigez pas vers une base applicative contenant des données à conserver.
+
+Exemple MySQL, avec une base `laravel_ban_test` déjà créée et les identifiants de votre serveur de test :
+
+```bash
+BAN_TEST_DB_DRIVER=mysql \
+BAN_TEST_DB_HOST=127.0.0.1 \
+BAN_TEST_DB_PORT=3306 \
+BAN_TEST_DB_DATABASE=laravel_ban_test \
+BAN_TEST_DB_USERNAME=root \
+BAN_TEST_DB_PASSWORD=testing \
+./vendor/bin/pest tests/Feature/RelationalDatabaseTest.php
+```
+
+Exemple PostgreSQL :
+
+```bash
+BAN_TEST_DB_DRIVER=pgsql \
+BAN_TEST_DB_HOST=127.0.0.1 \
+BAN_TEST_DB_PORT=5432 \
+BAN_TEST_DB_DATABASE=laravel_ban_test \
+BAN_TEST_DB_USERNAME=postgres \
+BAN_TEST_DB_PASSWORD=testing \
+./vendor/bin/pest tests/Feature/RelationalDatabaseTest.php
+```
+
+Sans `BAN_TEST_DB_DRIVER`, ces tests sont ignorés. Les valeurs supportées sont `mysql` et `pgsql`.
+
+### Intégration continue
+
+Le workflow configure une matrice Laravel 11 / 12 / 13 avec Livewire 3 / 4, un job du cœur du package sans Livewire installé, et des jobs de base de données utilisant les services MySQL 8 et PostgreSQL 16. Le job `quality` vérifie Composer, le formatage, l'analyse statique et les avis de sécurité sur les dépendances récentes.
+
+L'exception `COMPOSER_NO_SECURITY_BLOCKING` est limitée aux jobs Laravel 11 isolés pour couvrir cette compatibilité malgré les avis amont ; elle n'est pas appliquée au job `quality` ni aux installations applicatives.
 
 ---
 
 ## Licence
 
 MIT — [Godrade](https://github.com/godrade)
-

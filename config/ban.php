@@ -30,7 +30,7 @@ return [
     | How long (in seconds) ban status is cached. Set to 0 to disable caching.
     | Default: 3600 (1 hour).
     */
-    'cache_ttl' => (int)env('BAN_CACHE_TTL', 3600),
+    'cache_ttl' => (int) env('BAN_CACHE_TTL', 3600),
 
     /*
     |--------------------------------------------------------------------------
@@ -74,7 +74,7 @@ return [
     | Set to true to allow stacking multiple active bans on the same model /
     | feature (legacy behaviour).
     */
-    'allow_overlapping_bans' => (bool)env('BAN_ALLOW_OVERLAPPING', false),
+    'allow_overlapping_bans' => (bool) env('BAN_ALLOW_OVERLAPPING', false),
 
     /*
     |--------------------------------------------------------------------------

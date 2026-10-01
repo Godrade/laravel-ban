@@ -4,17 +4,13 @@ declare(strict_types=1);
 
 namespace Godrade\LaravelBan\Blade;
 
+use Godrade\LaravelBan\Contracts\Bannable;
+use Godrade\LaravelBan\Support\IpBanLookup;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\View\Compilers\BladeCompiler;
-use Godrade\LaravelBan\Contracts\Bannable;
-use Godrade\LaravelBan\Models\BannedIp;
-use Godrade\LaravelBan\Traits\HasBans;
 
 final class BanDirectives
 {
-    /** Per-request memoization cache for IP ban lookups. */
-    private static array $ipCache = [];
-
     public function register(BladeCompiler $blade): void
     {
         // @banned($model = null) ... @endbanned
@@ -84,10 +80,10 @@ final class BanDirectives
         });
     }
 
-    /** Flush the static IP cache (required for Laravel Octane). */
+    /** Explicitly invalidate request memoization, for example after bulk updates. */
     public static function flushIpCache(): void
     {
-        self::$ipCache = [];
+        IpBanLookup::flush();
     }
 
     // -------------------------------------------------------------------------
@@ -120,34 +116,13 @@ final class BanDirectives
     {
         $target = $model ?? Auth::user();
 
-        if ($target === null || ! $this->usesTrait($target)) {
-            return null;
-        }
-
-        /** @var Bannable $target */
-        return $target;
+        return $target instanceof Bannable ? $target : null;
     }
 
     private function resolveIpBan(?string $ip, ?string $feature): bool
     {
-        $ip ??= request()->ip() ?? '';
-        $cacheKey = $ip . ':' . ($feature ?? '');
+        $request = request();
 
-        if (array_key_exists($cacheKey, self::$ipCache)) {
-            return self::$ipCache[$cacheKey];
-        }
-
-        $query = BannedIp::active()->forIp($ip);
-
-        if ($feature !== null) {
-            $query->forFeature($feature);
-        }
-
-        return self::$ipCache[$cacheKey] = $query->exists();
-    }
-
-    private function usesTrait(mixed $model): bool
-    {
-        return in_array(HasBans::class, class_uses_recursive($model), strict: true);
+        return IpBanLookup::isBanned($request, $ip ?? $request->ip() ?? '', $feature);
     }
 }

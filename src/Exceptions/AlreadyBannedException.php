@@ -21,7 +21,7 @@ final class AlreadyBannedException extends RuntimeException
             : 'permanent';
 
         parent::__construct(
-            "This model is already banned {$scope} ({$expiry}). " .
+            "This model is already banned {$scope} ({$expiry}). ".
             'Call unban() first or wait for the existing ban to expire.',
         );
     }

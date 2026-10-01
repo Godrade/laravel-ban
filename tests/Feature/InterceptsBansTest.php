@@ -2,430 +2,403 @@
 
 declare(strict_types=1);
 
+namespace Godrade\LaravelBan\Tests\Feature;
+
 use Godrade\LaravelBan\Attributes\LockedByBan;
+use Godrade\LaravelBan\BanServiceProvider;
 use Godrade\LaravelBan\Contracts\Bannable;
-use Godrade\LaravelBan\Middleware\BlockBannedIp;
-use Godrade\LaravelBan\Models\Ban;
-use Godrade\LaravelBan\Models\BannedIp;
+use Godrade\LaravelBan\Tests\Support\TestCase;
 use Godrade\LaravelBan\Traits\HasBans;
 use Godrade\LaravelBan\Traits\InterceptsBans;
 use Illuminate\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\Authenticatable as AuthenticatableContract;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
+use Livewire\Attributes\On;
+use Livewire\Component;
+use Livewire\Exceptions\EventHandlerDoesNotExist;
+use Livewire\Exceptions\MethodNotFoundException;
+use Livewire\Livewire;
+use Livewire\LivewireServiceProvider;
+use Mockery;
 
-// ---------------------------------------------------------------------------
-// Stubs
-// ---------------------------------------------------------------------------
-
-/**
- * Minimal User stub with ban capability.
- */
-class BanUser extends Model implements AuthenticatableContract, Bannable
+class InterceptsBansTest extends TestCase
 {
-    use HasBans, Authenticatable;
+    protected function getPackageProviders($app): array
+    {
+        return [LivewireServiceProvider::class, ...parent::getPackageProviders($app)];
+    }
 
-    protected $table      = 'users';
-    protected $guarded    = [];
-    public $timestamps    = false;
+    protected function getEnvironmentSetUp($app): void
+    {
+        parent::getEnvironmentSetUp($app);
+        $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('a', 32)));
+    }
 
-    public function getMorphClass(): string { return 'user'; }
-}
+    protected function setUp(): void
+    {
+        parent::setUp();
 
-/**
- * Minimal Livewire component base class that simulates v2's callMethod.
- * In real usage this would be Livewire\Component.
- */
-abstract class FakeLivewireComponent
-{
-    /** Tracks which methods have actually been executed. */
-    public array $executed = [];
+        Schema::create('livewire_ban_users', function (Blueprint $table): void {
+            $table->id();
+        });
 
-    public function callMethod(
-        string $method,
-        array $params = [],
-        ?callable $captureReturnValueCallback = null,
-    ): mixed {
-        $result = $this->{$method}(...$params);
-        $this->executed[] = $method;
+        (require __DIR__.'/../../database/migrations/2024_01_01_000001_create_bans_table.php')->up();
+        LivewireBanActionLog::$executed = [];
+    }
 
-        if ($captureReturnValueCallback !== null) {
-            ($captureReturnValueCallback)($result);
+    public function test_an_allowed_action_executes_and_returns_its_result(): void
+    {
+        Livewire::actingAs($this->user())
+            ->test(MethodLockedComponent::class)
+            ->call('postComment', 'Hello')
+            ->assertReturned('Hello');
+
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_global_ban_stops_the_action_before_any_side_effect(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(MethodLockedComponent::class)
+            ->call('postComment', 'Blocked')
+            ->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+        $this->assertSame('Your account has been suspended.', session('ban_error'));
+    }
+
+    public function test_unlocked_actions_remain_available_to_banned_users(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(MethodLockedComponent::class)
+            ->call('viewPosts')
+            ->assertReturned('posts');
+
+        $this->assertSame(['viewPosts'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_guests_are_not_blocked_by_ban_locks(): void
+    {
+        Livewire::test(MethodLockedComponent::class)->call('postComment', 'Guest')->assertReturned('Guest');
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_authenticated_users_without_the_bannable_contract_are_allowed(): void
+    {
+        $user = Mockery::mock(AuthenticatableContract::class);
+        Auth::setUser($user);
+
+        Livewire::test(MethodLockedComponent::class)->call('postComment', 'Plain')->assertReturned('Plain');
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_the_bannable_contract_is_supported_without_the_has_bans_trait(): void
+    {
+        $user = Mockery::mock(AuthenticatableContract::class, Bannable::class);
+        $user->shouldReceive('isBanned')->once()->andReturn(true);
+        Auth::setUser($user);
+
+        Livewire::test(MethodLockedComponent::class)->call('postComment', 'Blocked')->assertForbidden();
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_rebooting_the_provider_does_not_duplicate_action_checks(): void
+    {
+        $this->app->getProvider(BanServiceProvider::class)->boot();
+        $user = Mockery::mock(AuthenticatableContract::class, Bannable::class);
+        $user->shouldReceive('isBanned')->once()->andReturn(false);
+        Auth::setUser($user);
+
+        Livewire::test(MethodLockedComponent::class)->call('postComment', 'Allowed')->assertReturned('Allowed');
+    }
+
+    public function test_a_matching_feature_ban_blocks_the_action(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'comments'))
+            ->test(FeatureLockedComponent::class)->call('postComment')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_global_ban_also_blocks_a_feature_lock(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(FeatureLockedComponent::class)->call('postComment')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_different_feature_ban_does_not_block_the_action(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'forum'))
+            ->test(FeatureLockedComponent::class)->call('postComment')->assertReturned('comment');
+
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_feature_ban_does_not_trigger_a_global_only_lock(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'comments'))
+            ->test(MethodLockedComponent::class)->call('postComment', 'Allowed')->assertReturned('Allowed');
+    }
+
+    public function test_a_class_lock_applies_to_all_actions(): void
+    {
+        Livewire::actingAs($this->user(banned: true));
+        Livewire::test(ClassLockedComponent::class)->call('postComment', 'Blocked')->assertForbidden();
+        Livewire::test(ClassLockedComponent::class)->call('viewPosts')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_method_lock_overrides_the_class_feature(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'forum'));
+        Livewire::test(MixedLockComponent::class)->call('postComment')->assertReturned('comment');
+        Livewire::test(MixedLockComponent::class)->call('postThread')->assertForbidden();
+
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_method_lock_blocks_even_when_the_class_feature_is_allowed(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'comments'));
+        Livewire::test(MixedLockComponent::class)->call('postThread')->assertReturned('thread');
+        Livewire::test(MixedLockComponent::class)->call('postComment')->assertForbidden();
+
+        $this->assertSame(['postThread'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_inherited_method_locks_are_enforced(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(InheritedMethodComponent::class)->call('postComment', 'Blocked')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_inherited_class_locks_are_enforced(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(InheritedClassComponent::class)->call('viewPosts')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_the_nearest_class_lock_takes_precedence(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'forum'))
+            ->test(OverriddenClassComponent::class)->call('postThread')->assertReturned('thread');
+    }
+
+    public function test_attributed_event_listeners_cannot_bypass_the_lock(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'comments'))
+            ->test(FeatureLockedComponent::class)->dispatch('comment:post')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_allowed_event_listeners_still_execute(): void
+    {
+        Livewire::actingAs($this->user())
+            ->test(FeatureLockedComponent::class)->dispatch('comment:post')->assertSuccessful();
+
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_listeners_defined_in_the_listeners_property_are_checked(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'comments'))
+            ->test(FeatureLockedComponent::class)->dispatch('legacy:comment')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_event_listeners_honor_the_method_override_of_a_class_lock(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'forum'))
+            ->test(MixedLockComponent::class)->dispatch('comment:post')->assertSuccessful();
+
+        $this->assertSame(['postComment'], LivewireBanActionLog::$executed);
+    }
+
+    public function test_a_class_lock_blocks_an_event_listener_without_a_method_attribute(): void
+    {
+        Livewire::actingAs($this->user(banned: true, feature: 'forum'))
+            ->test(MixedLockComponent::class)->dispatch('thread:post')->assertForbidden();
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_unknown_events_are_still_rejected_by_livewire(): void
+    {
+        $this->expectException(EventHandlerDoesNotExist::class);
+        Livewire::test(FeatureLockedComponent::class)->dispatch('unknown:event');
+    }
+
+    public function test_private_actions_are_not_exposed(): void
+    {
+        $component = Livewire::test(MethodLockedComponent::class);
+
+        try {
+            $component->call('privateAction');
+            $this->fail('A private action must not be callable.');
+        } catch (MethodNotFoundException) {
+            $this->assertSame([], LivewireBanActionLog::$executed);
+        }
+    }
+
+    public function test_there_is_no_public_call_method_trampoline(): void
+    {
+        $this->expectException(MethodNotFoundException::class);
+        Livewire::test(MethodLockedComponent::class)->call('callMethod', 'privateAction');
+    }
+
+    public function test_the_manual_helper_is_not_a_public_livewire_action(): void
+    {
+        $this->expectException(MethodNotFoundException::class);
+        Livewire::test(MethodLockedComponent::class)->call('checkBanLock', 'postComment');
+    }
+
+    public function test_the_protected_helper_can_guard_internal_calls(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(MethodLockedComponent::class)->call('manualAction')
+            ->assertReturned(null)->assertSee('Your account has been suspended.');
+
+        $this->assertSame([], LivewireBanActionLog::$executed);
+    }
+
+    public function test_components_must_opt_in_with_the_trait(): void
+    {
+        Livewire::actingAs($this->user(banned: true))
+            ->test(ComponentWithoutBanTrait::class)->call('post')->assertReturned('posted');
+    }
+
+    private function user(bool $banned = false, ?string $feature = null): LivewireBanUser
+    {
+        $user = LivewireBanUser::create();
+
+        if ($banned) {
+            $user->ban(['feature' => $feature]);
         }
 
-        return $result;
+        return $user;
     }
 }
 
-/**
- * Component with a method-level lock (no feature scope).
- */
-class MethodLockedComponent extends FakeLivewireComponent
+class LivewireBanUser extends Model implements AuthenticatableContract, Bannable
+{
+    use Authenticatable, HasBans;
+
+    protected $table = 'livewire_ban_users';
+
+    protected $guarded = [];
+
+    public $timestamps = false;
+}
+
+class LivewireBanActionLog
+{
+    public static array $executed = [];
+}
+
+class MethodLockedComponent extends Component
 {
     use InterceptsBans;
 
     #[LockedByBan]
-    public function postComment(): string
+    public function postComment(string $message): string
     {
-        return 'comment_posted';
+        LivewireBanActionLog::$executed[] = 'postComment';
+
+        return $message;
     }
 
     public function viewPosts(): string
     {
-        return 'posts_viewed';
+        LivewireBanActionLog::$executed[] = 'viewPosts';
+
+        return 'posts';
+    }
+
+    public function manualAction(): ?string
+    {
+        if ($this->checkBanLock('postComment')) {
+            return null;
+        }
+
+        return $this->postComment('Manual');
+    }
+
+    private function privateAction(): void
+    {
+        LivewireBanActionLog::$executed[] = 'privateAction';
+    }
+
+    public function render(): string
+    {
+        return '<div>Comments {{ session("ban_error") }}</div>';
     }
 }
 
-/**
- * Component with a feature-scoped method-level lock.
- */
-class FeatureLockedComponent extends FakeLivewireComponent
+class FeatureLockedComponent extends Component
 {
     use InterceptsBans;
 
+    protected $listeners = ['legacy:comment' => 'postComment'];
+
+    #[On('comment:post')]
     #[LockedByBan(feature: 'comments')]
     public function postComment(): string
     {
-        return 'comment_posted';
+        LivewireBanActionLog::$executed[] = 'postComment';
+
+        return 'comment';
+    }
+
+    public function render(): string
+    {
+        return '<div>Comments</div>';
     }
 }
 
-/**
- * Component where the entire class is locked (no feature scope).
- */
 #[LockedByBan]
-class ClassLockedComponent extends FakeLivewireComponent
-{
-    use InterceptsBans;
+class ClassLockedComponent extends MethodLockedComponent {}
 
-    public function postComment(): string
-    {
-        return 'comment_posted';
-    }
-
-    public function editProfile(): string
-    {
-        return 'profile_edited';
-    }
-}
-
-/**
- * Component where the class is locked to a feature, but one method overrides
- * the lock with its own feature scope.
- */
 #[LockedByBan(feature: 'forum')]
-class MixedLockComponent extends FakeLivewireComponent
+class MixedLockComponent extends FeatureLockedComponent
 {
-    use InterceptsBans;
-
-    // Inherits class-level lock on feature 'forum'
+    #[On('thread:post')]
     public function postThread(): string
     {
-        return 'thread_posted';
-    }
+        LivewireBanActionLog::$executed[] = 'postThread';
 
-    // Method-level lock takes precedence over class-level
-    #[LockedByBan(feature: 'comments')]
-    public function postComment(): string
+        return 'thread';
+    }
+}
+
+class InheritedMethodComponent extends MethodLockedComponent {}
+
+class InheritedClassComponent extends ClassLockedComponent {}
+
+#[LockedByBan(feature: 'comments')]
+class OverriddenClassComponent extends MixedLockComponent {}
+
+#[LockedByBan]
+class ComponentWithoutBanTrait extends Component
+{
+    public function post(): string
     {
-        return 'comment_posted';
+        return 'posted';
+    }
+
+    public function render(): string
+    {
+        return '<div>Posts</div>';
     }
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function createSchema(): void
-{
-    Schema::create('users', function (Blueprint $table) {
-        $table->id();
-        $table->string('name');
-    });
-
-    Schema::create('bans', function (Blueprint $table) {
-        $table->id();
-        $table->morphs('bannable');
-        $table->nullableMorphs('created_by');
-        $table->nullableMorphs('cause');
-        $table->string('feature')->nullable();
-        $table->text('reason')->nullable();
-        $table->string('status', 50)->default('active');
-        $table->timestamp('expired_at')->nullable();
-        $table->timestamps();
-        $table->softDeletes();
-    });
-
-    Schema::create('banned_ips', function (Blueprint $table) {
-        $table->id();
-        $table->string('ip_address', 45)->unique();
-        $table->string('feature')->nullable();
-        $table->text('reason')->nullable();
-        $table->nullableMorphs('created_by');
-        $table->timestamp('expired_at')->nullable();
-        $table->timestamps();
-        $table->softDeletes();
-    });
-}
-
-function dropSchema(): void
-{
-    Schema::dropIfExists('bans');
-    Schema::dropIfExists('banned_ips');
-    Schema::dropIfExists('users');
-}
-
-function createUser(): BanUser
-{
-    return BanUser::create(['name' => 'Alice']);
-}
-
-// ---------------------------------------------------------------------------
-// InterceptsBans — method-level lock
-// ---------------------------------------------------------------------------
-
-describe('InterceptsBans – method-level #[LockedByBan]', function () {
-
-    beforeEach(fn () => createSchema());
-    afterEach(function () {
-        Auth::logout();
-        dropSchema();
-    });
-
-    it('executes the method when the user is NOT banned', function () {
-        $user = createUser();
-        Auth::login($user);
-
-        $component = new MethodLockedComponent();
-        $result    = $component->callMethod('postComment');
-
-        expect($result)->toBe('comment_posted')
-            ->and($component->executed)->toContain('postComment');
-    });
-
-    it('blocks the method and flashes ban_error when the user IS banned', function () {
-        $user = createUser();
-        $user->ban(['reason' => 'Spam']);
-        Auth::login($user);
-
-        $component = new MethodLockedComponent();
-        $result    = $component->callMethod('postComment');
-
-        expect($result)->toBeNull()
-            ->and($component->executed)->not->toContain('postComment')
-            ->and(session('ban_error'))->not->toBeEmpty();
-    });
-
-    it('does NOT block an unlocked method on the same component', function () {
-        $user = createUser();
-        $user->ban(['reason' => 'Spam']);
-        Auth::login($user);
-
-        $component = new MethodLockedComponent();
-        $result    = $component->callMethod('viewPosts');
-
-        expect($result)->toBe('posts_viewed')
-            ->and($component->executed)->toContain('viewPosts');
-    });
-
-    it('does not block when no user is authenticated', function () {
-        $component = new MethodLockedComponent();
-        $result    = $component->callMethod('postComment');
-
-        expect($result)->toBe('comment_posted');
-    });
-
-});
-
-// ---------------------------------------------------------------------------
-// InterceptsBans — feature-scoped lock
-// ---------------------------------------------------------------------------
-
-describe('InterceptsBans – feature-scoped #[LockedByBan(feature:)]', function () {
-
-    beforeEach(fn () => createSchema());
-    afterEach(function () {
-        Auth::logout();
-        dropSchema();
-    });
-
-    it('blocks when user is banned from the locked feature', function () {
-        $user = createUser();
-        $user->ban(['feature' => 'comments']);
-        Auth::login($user);
-
-        $component = new FeatureLockedComponent();
-        $result    = $component->callMethod('postComment');
-
-        expect($result)->toBeNull()
-            ->and(session('ban_error'))->not->toBeEmpty();
-    });
-
-    it('blocks when user has a global ban (global implies all features)', function () {
-        $user = createUser();
-        $user->ban(); // global ban
-        Auth::login($user);
-
-        $component = new FeatureLockedComponent();
-        $result    = $component->callMethod('postComment');
-
-        expect($result)->toBeNull();
-    });
-
-    it('does NOT block when the user is banned from a different feature', function () {
-        $user = createUser();
-        $user->ban(['feature' => 'forum']); // banned from forum, NOT comments
-        Auth::login($user);
-
-        $component = new FeatureLockedComponent();
-        $result    = $component->callMethod('postComment');
-
-        expect($result)->toBe('comment_posted');
-    });
-
-});
-
-// ---------------------------------------------------------------------------
-// InterceptsBans — class-level lock
-// ---------------------------------------------------------------------------
-
-describe('InterceptsBans – class-level #[LockedByBan]', function () {
-
-    beforeEach(fn () => createSchema());
-    afterEach(function () {
-        Auth::logout();
-        dropSchema();
-    });
-
-    it('blocks ALL methods when the class is locked and user is banned', function () {
-        $user = createUser();
-        $user->ban();
-        Auth::login($user);
-
-        $component = new ClassLockedComponent();
-
-        expect($component->callMethod('postComment'))->toBeNull()
-            ->and($component->callMethod('editProfile'))->toBeNull()
-            ->and($component->executed)->toBeEmpty();
-    });
-
-    it('allows ALL methods when the class is locked but user is NOT banned', function () {
-        $user = createUser();
-        Auth::login($user);
-
-        $component = new ClassLockedComponent();
-
-        expect($component->callMethod('postComment'))->toBe('comment_posted')
-            ->and($component->callMethod('editProfile'))->toBe('profile_edited');
-    });
-
-});
-
-// ---------------------------------------------------------------------------
-// InterceptsBans — method attribute takes precedence over class attribute
-// ---------------------------------------------------------------------------
-
-describe('InterceptsBans – method attribute overrides class attribute', function () {
-
-    beforeEach(fn () => createSchema());
-    afterEach(function () {
-        Auth::logout();
-        dropSchema();
-    });
-
-    it('uses the method feature scope even when class has a different feature scope', function () {
-        $user = createUser();
-        // Banned from 'comments' only, NOT 'forum'
-        $user->ban(['feature' => 'comments']);
-        Auth::login($user);
-
-        $component = new MixedLockComponent();
-
-        // postComment has #[LockedByBan(feature:'comments')] → blocked
-        expect($component->callMethod('postComment'))->toBeNull();
-
-        // postThread inherits class #[LockedByBan(feature:'forum')] → NOT blocked
-        expect($component->callMethod('postThread'))->toBe('thread_posted');
-    });
-
-});
-
-// ---------------------------------------------------------------------------
-// BlockBannedIp Middleware
-// ---------------------------------------------------------------------------
-
-describe('BlockBannedIp middleware', function () {
-
-    beforeEach(function () {
-        createSchema();
-        BlockBannedIp::flushCache();
-    });
-
-    afterEach(fn () => dropSchema());
-
-    it('allows a request from a non-banned IP', function () {
-        $request  = Request::create('/', 'GET', server: ['REMOTE_ADDR' => '10.0.0.1']);
-        $response = (new BlockBannedIp())->handle($request, fn ($r) => response('ok'));
-
-        expect($response->getContent())->toBe('ok');
-    });
-
-    it('aborts with 403 for a banned IP', function () {
-        BannedIp::create(['ip_address' => '1.2.3.4', 'reason' => 'attacker']);
-
-        $request = Request::create('/', 'GET', server: ['REMOTE_ADDR' => '1.2.3.4']);
-
-        expect(fn () => (new BlockBannedIp())->handle($request, fn ($r) => response('ok')))
-            ->toThrow(\Symfony\Component\HttpKernel\Exception\HttpException::class);
-    });
-
-    it('does NOT block when the IP ban has expired', function () {
-        BannedIp::create([
-            'ip_address' => '1.2.3.4',
-            'expired_at' => now()->subMinute(),
-        ]);
-
-        $request  = Request::create('/', 'GET', server: ['REMOTE_ADDR' => '1.2.3.4']);
-        $response = (new BlockBannedIp())->handle($request, fn ($r) => response('ok'));
-
-        expect($response->getContent())->toBe('ok');
-    });
-
-    it('memoizes the result and does not query the database twice', function () {
-        BannedIp::create(['ip_address' => '5.5.5.5']);
-
-        $queryCount = 0;
-        \DB::listen(function () use (&$queryCount) { $queryCount++; });
-
-        $request = Request::create('/', 'GET', server: ['REMOTE_ADDR' => '5.5.5.5']);
-        $mw      = new BlockBannedIp();
-
-        // Two calls with the same IP → only 1 DB query thanks to static cache
-        try { $mw->handle($request, fn ($r) => response('ok')); } catch (\Throwable) {}
-        try { $mw->handle($request, fn ($r) => response('ok')); } catch (\Throwable) {}
-
-        expect($queryCount)->toBe(1);
-    });
-
-    it('blocks a feature-scoped IP ban', function () {
-        BannedIp::create(['ip_address' => '9.9.9.9', 'feature' => 'api']);
-
-        $request = Request::create('/', 'GET', server: ['REMOTE_ADDR' => '9.9.9.9']);
-
-        expect(fn () => (new BlockBannedIp())->handle($request, fn ($r) => response('ok'), 'api'))
-            ->toThrow(\Symfony\Component\HttpKernel\Exception\HttpException::class);
-    });
-
-    it('does NOT block when the IP is banned on a different feature', function () {
-        BannedIp::create(['ip_address' => '9.9.9.9', 'feature' => 'api']);
-
-        $request  = Request::create('/', 'GET', server: ['REMOTE_ADDR' => '9.9.9.9']);
-        $response = (new BlockBannedIp())->handle($request, fn ($r) => response('ok'), 'web');
-
-        expect($response->getContent())->toBe('ok');
-    });
-
-});

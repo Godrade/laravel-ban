@@ -16,7 +16,7 @@ return new class extends Migration
             $table->id();
 
             // The IP address being banned (supports both IPv4 and IPv6)
-            $table->string('ip_address', 45)->unique()->index();
+            $table->string('ip_address', 45)->index();
 
             // Scoped ban: null means all features, a string limits to one feature
             $table->string('feature', 50)->nullable()->index();

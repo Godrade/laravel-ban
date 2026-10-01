@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Godrade\LaravelBan\Middleware;
 
 use Closure;
+use Godrade\LaravelBan\Contracts\Bannable;
 use Illuminate\Http\Request;
-use Godrade\LaravelBan\Traits\HasBans;
+use Illuminate\Support\Facades\Route;
 use Symfony\Component\HttpFoundation\Response;
 
 final class CheckBanned
@@ -14,9 +15,7 @@ final class CheckBanned
     /**
      * Handle an incoming request.
      *
-     * Redirects any authenticated user that carries an active global ban.
-     * For feature-scoped checks, use the @bannedFrom Blade directive or
-     * call $user->isBannedFrom($feature) directly in your controllers.
+     * Rejects banned API requests with 403 and redirects browser requests.
      *
      * Usage in route definition:
      *   Route::middleware('banned')->group(...)
@@ -35,7 +34,7 @@ final class CheckBanned
 
     private function userIsBanned(mixed $user, ?string $feature): bool
     {
-        if (! in_array(HasBans::class, class_uses_recursive($user), strict: true)) {
+        if (! $user instanceof Bannable) {
             return false;
         }
 
@@ -46,14 +45,32 @@ final class CheckBanned
 
     private function buildRedirectResponse(Request $request): Response
     {
+        $message = __('Your account has been suspended.');
+
+        if ($request->expectsJson()) {
+            return response()->json(['message' => $message], Response::HTTP_FORBIDDEN);
+        }
+
         $redirect = config('ban.redirect_url', 'login');
 
-        // Support both named routes and plain URLs
-        $url = filter_var($redirect, FILTER_VALIDATE_URL)
-            ? $redirect
-            : route($redirect);
+        if (is_string($redirect) && (filter_var($redirect, FILTER_VALIDATE_URL) || str_starts_with($redirect, '/'))) {
+            $url = url($redirect);
+        } elseif (is_string($redirect) && Route::has($redirect)) {
+            $url = route($redirect);
+        } else {
+            abort(Response::HTTP_FORBIDDEN, $message);
+        }
 
-        return redirect($url)
-            ->with('ban_error', __('Your account has been suspended.'));
+        if (rtrim($request->url(), '/') === rtrim($url, '/')) {
+            abort(Response::HTTP_FORBIDDEN, $message);
+        }
+
+        $response = redirect($url);
+
+        if ($request->hasSession()) {
+            $request->session()->flash('ban_error', $message);
+        }
+
+        return $response;
     }
 }

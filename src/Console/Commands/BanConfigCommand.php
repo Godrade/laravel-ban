@@ -32,7 +32,7 @@ final class BanConfigCommand extends Command
 
         $this->callSilently('vendor:publish', [
             '--provider' => 'Godrade\\LaravelBan\\BanServiceProvider',
-            '--tag'      => $tags,
+            '--tag' => $tags,
         ]);
 
         $this->info('Done! Review the published files in config/ban.php and database/migrations/.');
