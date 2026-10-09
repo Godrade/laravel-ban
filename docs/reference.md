@@ -2,7 +2,7 @@
 
 [← Retour au README](../README.md) · [Comportements avancés](advanced.md) · [Livewire](livewire.md)
 
-Commencez par le [démarrage rapide](../README.md#démarrage-rapide) pour installer le package et préparer votre modèle. Cette référence décrit le code courant ; consultez le [changelog](../CHANGELOG.md) pour distinguer les changements en préparation de la Bêta 1.
+Commencez par le [démarrage rapide](../README.md#démarrage-rapide) pour installer le package et préparer votre modèle. Cette référence décrit le code courant ; consultez le [changelog](../CHANGELOG.md) pour connaître les changements apportés par chaque bêta.
 
 - [Configuration](#configuration)
 - [Bannir, vérifier et débannir](#utilisation)

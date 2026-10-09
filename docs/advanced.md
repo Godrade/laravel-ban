@@ -13,7 +13,7 @@
 
 ## Mise à jour
 
-Ces changements appartiennent à la version en préparation, après **1.0.0-beta.1 (Bêta 1)**. Voir le [changelog](../CHANGELOG.md).
+Ces instructions concernent le passage de **1.0.0-beta.1 (Bêta 1)** à **1.0.0-beta.2 (Bêta 2)**. Voir le [changelog](../CHANGELOG.md).
 
 Après la mise à jour du package, exécutez `php artisan migrate`. La migration `2026_10_01_000003_allow_multiple_bans_per_ip.php` remplace l'unicité de `ip_address` par un index simple et normalise les adresses IPv6 existantes. Plusieurs fonctionnalités ou enregistrements historiques peuvent ainsi partager la même IP.
 

@@ -4,7 +4,7 @@ Bannissez un utilisateur ou une adresse IP, pour une durée limitée ou définit
 
 Le package fournit les méthodes de bannissement, les middleware pour protéger vos routes, les directives Blade et une intégration Livewire optionnelle. Il fonctionne aussi avec d’autres modèles Eloquent, comme une boutique ou une organisation.
 
-> **Le package est en bêta.** `1.0.0-beta.1` est la **Bêta 1**, pas une version stable 1.0.0. Ce README décrit le code en préparation : les changements [« Non publié »](CHANGELOG.md#non-publié) ne sont pas encore dans la Bêta 1. Pour cette dernière, consultez la [documentation du tag](https://github.com/Godrade/laravel-ban/tree/v1.0.0-beta.1).
+> **Le package est en bêta.** `1.0.0-beta.2` est la **Bêta 2**, pas une version stable 1.0.0. Elle introduit des ruptures de compatibilité par rapport à la Bêta 1 : consultez le [changelog](CHANGELOG.md) et le [guide de mise à jour](docs/advanced.md#mise-à-jour). Pour la Bêta 1, consultez la [documentation du tag](https://github.com/Godrade/laravel-ban/tree/v1.0.0-beta.1).
 
 ## Prérequis
 

@@ -5,9 +5,13 @@ Ce fichier répertorie les changements notables du package.
 Son format s'inspire de [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Les numéros de version suivent le [versionnement sémantique](https://semver.org/spec/v2.0.0.html).
 
-La première version publiée est **1.0.0-beta.1 (Bêta 1)**. La version stable 1.0.0 n'a pas encore été publiée.
+La dernière préversion publiée est **1.0.0-beta.2 (Bêta 2)**. La version stable 1.0.0 n'a pas encore été publiée.
 
 ## [Non publié]
+
+## [1.0.0-beta.2] — 2026-10-09
+
+Deuxième préversion. Elle contient plusieurs ruptures de compatibilité par rapport à la Bêta 1 : consultez le [guide de mise à jour](docs/advanced.md#mise-à-jour) dans `docs/advanced.md` avant de migrer.
 
 ### Suppressions
 
@@ -72,5 +76,6 @@ Première préversion du package, avant la sortie d'une version stable 1.0.0.
 - Commandes Artisan : `ban:user`, `ban:config`, `ban:list` et `ban:remove`.
 - Suite de tests Pest.
 
-[Non publié]: https://github.com/godrade/laravel-ban/compare/v1.0.0-beta.1...HEAD
+[Non publié]: https://github.com/godrade/laravel-ban/compare/v1.0.0-beta.2...HEAD
+[1.0.0-beta.2]: https://github.com/godrade/laravel-ban/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/godrade/laravel-ban/releases/tag/v1.0.0-beta.1
