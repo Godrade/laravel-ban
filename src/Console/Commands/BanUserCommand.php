@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Godrade\LaravelBan\Console\Commands;
 
 use Carbon\Carbon;
+use Godrade\LaravelBan\Contracts\Bannable;
+use Godrade\LaravelBan\Exceptions\AlreadyBannedException;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use Godrade\LaravelBan\Traits\HasBans;
+use InvalidArgumentException;
 
 final class BanUserCommand extends Command
 {
@@ -28,43 +31,63 @@ final class BanUserCommand extends Command
 
     public function handle(): int
     {
-        /** @var class-string $modelClass */
         $modelClass = $this->option('model');
 
-        if (! class_exists($modelClass)) {
+        if (! is_string($modelClass) || ! is_subclass_of($modelClass, Model::class)) {
             $this->error("Model class [{$modelClass}] does not exist.");
+
             return self::FAILURE;
         }
 
-        if (! in_array(HasBans::class, class_uses_recursive($modelClass), strict: true)) {
-            $this->error("Model [{$modelClass}] does not use the HasBans trait.");
+        if (! is_subclass_of($modelClass, Bannable::class)) {
+            $this->error("Model [{$modelClass}] must implement the Bannable contract.");
+
             return self::FAILURE;
         }
 
         try {
-            $model = $modelClass::findOrFail($this->argument('id'));
+            $model = $modelClass::query()->whereKey($this->argument('id'))->firstOrFail();
         } catch (ModelNotFoundException) {
             $this->error("No record found for [{$modelClass}] with id [{$this->argument('id')}].");
+
             return self::FAILURE;
         }
 
-        $expiredAt = $this->resolveExpiration();
-        $reason    = $this->option('reason') ?: null;
-        $feature   = $this->option('feature') ?: null;
+        try {
+            $expiredAt = $this->resolveExpiration();
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage());
 
-        $ban = $model->ban([
-            'reason'     => $reason,
-            'expired_at' => $expiredAt,
-            'feature'    => $feature,
-        ]);
+            return self::FAILURE;
+        }
+        $reason = $this->option('reason') ?: null;
+        $feature = $this->option('feature') ?: null;
+
+        try {
+            $ban = $model->ban([
+                'reason' => $reason,
+                'expired_at' => $expiredAt,
+                'feature' => $feature,
+            ]);
+        } catch (AlreadyBannedException $exception) {
+            $this->error($exception->getMessage());
+
+            return self::FAILURE;
+        }
+
+        if ($ban === null) {
+            $this->error('The ban was not created because another ban operation is already running for this model.');
+
+            return self::FAILURE;
+        }
 
         $this->info("Model [{$modelClass}#{$model->getKey()}] has been banned (ban #{$ban->id}).");
 
         $this->table(
             ['Field', 'Value'],
             [
-                ['Feature',    $ban->feature   ?? 'global'],
-                ['Reason',     $ban->reason    ?? '—'],
+                ['Feature',    $ban->feature ?? 'global'],
+                ['Reason',     $ban->reason ?? '—'],
                 ['Expires at', $ban->expired_at?->toDateTimeString() ?? 'permanent'],
             ],
         );
@@ -80,9 +103,8 @@ final class BanUserCommand extends Command
             return null;
         }
 
-        if (! ctype_digit((string) $duration) || (int) $duration <= 0) {
-            $this->warn("Invalid duration [{$duration}]. Defaulting to permanent ban.");
-            return null;
+        if (! ctype_digit((string) $duration) || filter_var($duration, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => intdiv(PHP_INT_MAX, 60)]]) === false) {
+            throw new InvalidArgumentException("Invalid duration [{$duration}]. Use a positive integer number of minutes.");
         }
 
         return now()->addMinutes((int) $duration);

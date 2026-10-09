@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Godrade\LaravelBan\Contracts\Bannable;
+use Godrade\LaravelBan\Exceptions\AlreadyBannedException;
 use Godrade\LaravelBan\Models\Ban;
 use Godrade\LaravelBan\Traits\HasBans;
 use Illuminate\Auth\Authenticatable;
@@ -18,13 +19,18 @@ use Illuminate\Support\Facades\Schema;
 
 class MaintenanceUser extends Model implements AuthenticatableContract, Bannable
 {
-    use HasBans, Authenticatable;
+    use Authenticatable, HasBans;
 
-    protected $table   = 'users';
+    protected $table = 'users';
+
     protected $guarded = [];
+
     public $timestamps = false;
 
-    public function getMorphClass(): string { return 'App\\Models\\User'; }
+    public function getMorphClass(): string
+    {
+        return 'App\\Models\\User';
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +146,7 @@ describe('ban:remove command', function () {
 
     it('soft-deletes a ban when confirmed', function () {
         $user = maintenanceUser();
-        $ban  = $user->ban(['reason' => 'To remove']);
+        $ban = $user->ban(['reason' => 'To remove']);
 
         Artisan::call('ban:remove', ['id' => $ban->id, '--no-confirm' => true]);
 
@@ -149,7 +155,7 @@ describe('ban:remove command', function () {
 
     it('permanently deletes a ban with --force', function () {
         $user = maintenanceUser();
-        $ban  = $user->ban(['reason' => 'Force remove']);
+        $ban = $user->ban(['reason' => 'Force remove']);
 
         Artisan::call('ban:remove', ['id' => $ban->id, '--force' => true, '--no-confirm' => true]);
 
@@ -163,7 +169,7 @@ describe('ban:remove command', function () {
 
     it('aborts without deleting when user declines confirmation', function () {
         $user = maintenanceUser();
-        $ban  = $user->ban(['reason' => 'Keep me']);
+        $ban = $user->ban(['reason' => 'Keep me']);
 
         // No --no-confirm → prompt → fake "no" by not confirming (Artisan mock returns false)
         // We simulate decline by piping 'no' via the command test helper
@@ -188,44 +194,44 @@ describe('Ban MassPrunable', function () {
     it('includes bans expired more than 30 days ago in the prunable query', function () {
         Ban::create([
             'bannable_type' => 'App\\Models\\User',
-            'bannable_id'   => 1,
-            'expired_at'    => now()->subDays(31),
+            'bannable_id' => 1,
+            'expired_at' => now()->subDays(31),
         ]);
 
-        $prunable = (new Ban())->prunable()->get();
+        $prunable = (new Ban)->prunable()->get();
         expect($prunable)->toHaveCount(1);
     });
 
     it('excludes bans expired less than 30 days ago', function () {
         Ban::create([
             'bannable_type' => 'App\\Models\\User',
-            'bannable_id'   => 1,
-            'expired_at'    => now()->subDays(29),
+            'bannable_id' => 1,
+            'expired_at' => now()->subDays(29),
         ]);
 
-        $prunable = (new Ban())->prunable()->get();
+        $prunable = (new Ban)->prunable()->get();
         expect($prunable)->toHaveCount(0);
     });
 
     it('excludes permanent bans (expired_at = null)', function () {
         Ban::create([
             'bannable_type' => 'App\\Models\\User',
-            'bannable_id'   => 1,
-            'expired_at'    => null,
+            'bannable_id' => 1,
+            'expired_at' => null,
         ]);
 
-        $prunable = (new Ban())->prunable()->get();
+        $prunable = (new Ban)->prunable()->get();
         expect($prunable)->toHaveCount(0);
     });
 
     it('excludes bans that are still active', function () {
         Ban::create([
             'bannable_type' => 'App\\Models\\User',
-            'bannable_id'   => 1,
-            'expired_at'    => now()->addDays(7),
+            'bannable_id' => 1,
+            'expired_at' => now()->addDays(7),
         ]);
 
-        $prunable = (new Ban())->prunable()->get();
+        $prunable = (new Ban)->prunable()->get();
         expect($prunable)->toHaveCount(0);
     });
 
@@ -242,7 +248,7 @@ describe('HasBans::syncBan()', function () {
 
     it('creates a new ban when none exists', function () {
         $user = maintenanceUser();
-        $ban  = $user->syncBan(['reason' => 'first sync']);
+        $ban = $user->syncBan(['reason' => 'first sync']);
 
         expect($ban)->toBeInstanceOf(Ban::class)
             ->and($ban->reason)->toBe('first sync')
@@ -260,10 +266,10 @@ describe('HasBans::syncBan()', function () {
     });
 
     it('updates expired_at on the existing ban', function () {
-        $user     = maintenanceUser();
+        $user = maintenanceUser();
         $original = $user->syncBan(['expired_at' => now()->addDay()]);
 
-        $newExpiry  = now()->addDays(7);
+        $newExpiry = now()->addDays(7);
         $synced = $user->syncBan(['expired_at' => $newExpiry]);
 
         expect(Ban::count())->toBe(1)
@@ -275,7 +281,7 @@ describe('HasBans::syncBan()', function () {
         $user->ban(['reason' => 'original']);
 
         expect(fn () => $user->syncBan(['reason' => 'sync over existing']))
-            ->not->toThrow(\Godrade\LaravelBan\Exceptions\AlreadyBannedException::class);
+            ->not->toThrow(AlreadyBannedException::class);
     });
 
     it('handles feature-scoped syncs independently', function () {
@@ -313,9 +319,9 @@ describe('HasBans::syncBan()', function () {
         // Force-insert an expired ban directly (bypassing AlreadyBannedException)
         Ban::create([
             'bannable_type' => $user->getMorphClass(),
-            'bannable_id'   => $user->getKey(),
-            'reason'        => 'old expired',
-            'expired_at'    => now()->subHour(),
+            'bannable_id' => $user->getKey(),
+            'reason' => 'old expired',
+            'expired_at' => now()->subHour(),
         ]);
 
         $ban = $user->syncBan(['reason' => 'fresh ban']);

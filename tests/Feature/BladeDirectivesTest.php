@@ -18,13 +18,18 @@ use Illuminate\Support\Facades\Schema;
 
 class BladeUser extends Model implements AuthenticatableContract, Bannable
 {
-    use HasBans, Authenticatable;
+    use Authenticatable, HasBans;
 
-    protected $table   = 'blade_users';
+    protected $table = 'blade_users';
+
     protected $guarded = [];
+
     public $timestamps = false;
 
-    public function getMorphClass(): string { return 'blade_user'; }
+    public function getMorphClass(): string
+    {
+        return 'blade_user';
+    }
 }
 
 // ---------------------------------------------------------------------------

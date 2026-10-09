@@ -4,287 +4,208 @@ declare(strict_types=1);
 
 namespace Godrade\LaravelBan\Traits;
 
+use Closure;
 use DateTimeInterface;
-use Illuminate\Cache\Repository as CacheRepository;
-use Illuminate\Contracts\Cache\Repository;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\MorphMany;
-use Illuminate\Support\Facades\Cache;
+use Godrade\LaravelBan\Enums\BanStatus;
 use Godrade\LaravelBan\Events\ModelBanned;
 use Godrade\LaravelBan\Events\ModelBanUpdated;
 use Godrade\LaravelBan\Events\ModelUnbanned;
-use Godrade\LaravelBan\Enums\BanStatus;
 use Godrade\LaravelBan\Exceptions\AlreadyBannedException;
 use Godrade\LaravelBan\Models\Ban;
+use Godrade\LaravelBan\Support\BanCache;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use LogicException;
 
 /**
- * Adds ban/unban capability to any Eloquent model.
+ * Adds ban/unban capability to any persisted Eloquent model.
  *
  * @mixin Model
  */
 trait HasBans
 {
-    /**
-     * Per-instance execution lock to prevent recursive ban/unban calls.
-     * Keyed by spl_object_hash($this).
-     */
+    /** Guard listeners that re-enter through another instance of the same model. */
     protected static array $executingBans = [];
 
-    // -------------------------------------------------------------------------
-    // Relationship
-    // -------------------------------------------------------------------------
-
+    /** @return MorphMany<Ban, $this> */
     public function bans(): MorphMany
     {
         return $this->morphMany(Ban::class, 'bannable');
     }
 
-    // -------------------------------------------------------------------------
-    // Core API
-    // -------------------------------------------------------------------------
-
     /**
-     * Ban this model.
-     *
-     * Returns the created {@see Ban} instance, or `null` if a recursive call
-     * was detected (the static lock was already held for this instance).
+     * Ban this model. Recursive calls for the same database identity return null.
      *
      * @param array{
      *     reason?: string|null,
      *     expired_at?: DateTimeInterface|string|null,
      *     feature?: string|null,
      *     created_by?: Model|null,
+     *     cause?: Model|null,
      * } $attributes
      */
     public function ban(array $attributes = []): ?Ban
     {
-        $lock = spl_object_hash($this);
-
-        if (isset(self::$executingBans[$lock])) {
-            return null;
-        }
-
-        self::$executingBans[$lock] = true;
-
-        try {
-            $feature   = $attributes['feature'] ?? null;
-            $createdBy = $attributes['created_by'] ?? null;
+        return $this->withBanLock(function () use ($attributes): Ban {
+            $feature = $attributes['feature'] ?? null;
 
             if (! config('ban.allow_overlapping_bans', false)) {
-                $existing = $this->bans()
-                    ->active()
-                    ->where('feature', $feature)
-                    ->first();
+                $existing = $this->bans()->active()->where('feature', $feature)->lockForUpdate()->first();
 
                 if ($existing !== null) {
                     throw new AlreadyBannedException($existing);
                 }
             }
 
-            /** @var Ban $ban */
-            $ban = $this->bans()->create([
-                'feature'         => $feature,
-                'reason'          => $attributes['reason'] ?? null,
-                'expired_at'      => $attributes['expired_at'] ?? null,
-                'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
-                'created_by_id'   => $createdBy?->getKey(),
-            ]);
-
-            $this->flushBanCache($feature);
-
-            event(new ModelBanned($this, $ban));
+            $ban = $this->bans()->create($this->banPayload($attributes) + ['feature' => $feature]);
+            $this->dispatchBanEvent(new ModelBanned($this, $ban));
 
             return $ban;
-        } finally {
-            unset(self::$executingBans[$lock]);
-        }
+        });
     }
 
     /**
-     * Synchronize the active ban for this model on the given scope.
-     *
-     * - If an active ban already exists on the same feature, it is **updated**
-     *   in place (reason, expired_at, created_by) and ModelBanUpdated is dispatched.
-     * - If no active ban exists, a new one is **created** and ModelBanned is dispatched.
-     *
-     * Unlike ban(), this method never throws AlreadyBannedException.
-     *
-     * Returns the created or updated {@see Ban} instance, or `null` if a
-     * recursive call was detected (the static lock was already held for this instance).
+     * Create or update the active ban in this exact scope. Omitted attributes
+     * are preserved on update; explicitly passing null clears an attribute.
      *
      * @param array{
      *     reason?: string|null,
-     *     expired_at?: \DateTimeInterface|string|null,
+     *     expired_at?: DateTimeInterface|string|null,
      *     feature?: string|null,
-     *     created_by?: \Illuminate\Database\Eloquent\Model|null,
+     *     created_by?: Model|null,
+     *     cause?: Model|null,
      * } $attributes
      */
     public function syncBan(array $attributes = []): ?Ban
     {
-        $lock = spl_object_hash($this);
+        return $this->withBanLock(function () use ($attributes): Ban {
+            $feature = $attributes['feature'] ?? null;
+            $payload = $this->banPayload($attributes);
+            $ban = $this->bans()->active()->where('feature', $feature)->lockForUpdate()->first();
+
+            if ($ban !== null) {
+                $originalAttributes = $ban->getOriginal();
+                $ban->update($payload);
+                $this->dispatchBanEvent(new ModelBanUpdated($this, $ban, $originalAttributes));
+            } else {
+                $ban = $this->bans()->create($payload + ['feature' => $feature]);
+                $this->dispatchBanEvent(new ModelBanned($this, $ban));
+            }
+
+            return $ban;
+        });
+    }
+
+    /** Cancel active bans in this exact scope; null targets global bans only. */
+    public function unban(?string $feature = null): void
+    {
+        $this->withBanLock(function () use ($feature): void {
+            $this->bans()->active()->where('feature', $feature)->lockForUpdate()->get()
+                ->each(function (Ban $ban): void {
+                    $ban->update(['status' => BanStatus::CANCELLED]);
+                });
+
+            $this->flushBanCache($feature);
+            $this->dispatchBanEvent(new ModelUnbanned($this, $feature));
+        });
+    }
+
+    public function isBanned(): bool
+    {
+        return BanCache::check($this, null);
+    }
+
+    /** Global bans also block every feature, without caching a combined answer. */
+    public function isBannedFrom(string $feature): bool
+    {
+        return $this->isBanned() || BanCache::check($this, $feature);
+    }
+
+    /** Call after bulk query updates/deletes, which bypass Eloquent model events. */
+    public function flushBanCache(?string $feature = null): void
+    {
+        BanCache::forget($this, $feature);
+    }
+
+    private function banPayload(array $attributes): array
+    {
+        $payload = array_intersect_key($attributes, array_flip(['reason', 'expired_at']));
+
+        foreach (['created_by', 'cause'] as $relation) {
+            if (array_key_exists($relation, $attributes)) {
+                $related = $attributes[$relation];
+                $payload[$relation.'_type'] = $related?->getMorphClass();
+                $payload[$relation.'_id'] = $related?->getKey();
+            }
+        }
+
+        return $payload;
+    }
+
+    /** Serialize changes on the parent row, including when no ban row exists yet. */
+    private function withBanLock(Closure $callback): mixed
+    {
+        $lock = $this->banLockKey();
 
         if (isset(self::$executingBans[$lock])) {
             return null;
         }
 
-        self::$executingBans[$lock] = true;
-
-        try {
-            $feature   = $attributes['feature'] ?? null;
-            $createdBy = $attributes['created_by'] ?? null;
-
-            $payload = [
-                'reason'          => $attributes['reason'] ?? null,
-                'expired_at'      => $attributes['expired_at'] ?? null,
-                'created_by_type' => $createdBy ? $createdBy->getMorphClass() : null,
-                'created_by_id'   => $createdBy?->getKey(),
-            ];
-
-            /** @var Ban|null $existing */
-            $existing = $this->bans()
-                ->active()
-                ->where('feature', $feature)
-                ->first();
-
-            if ($existing !== null) {
-                $originalAttributes = $existing->getOriginal();
-                $existing->update($payload);
-                $existing->refresh();
-                $ban = $existing;
-
-                event(new ModelBanUpdated($this, $ban, $originalAttributes));
-            } else {
-                /** @var Ban $ban */
-                $ban = $this->bans()->create(array_merge($payload, ['feature' => $feature]));
-
-                event(new ModelBanned($this, $ban));
-            }
-
-            $this->flushBanCache($feature);
-
-            return $ban;
-        } finally {
-            unset(self::$executingBans[$lock]);
-        }
-    }
-
-    /**
-     * Remove active bans. Pass a feature to target only that scope,
-     * or null to remove all global bans.
-     */
-    public function unban(?string $feature = null): void
-    {
-        $lock = spl_object_hash($this);
-
-        if (isset(self::$executingBans[$lock])) {
-            return;
+        if (! $this->exists || $this->getKey() === null) {
+            throw new LogicException('Save the model before changing its bans.');
         }
 
         self::$executingBans[$lock] = true;
 
         try {
-            $query = $this->bans()->active();
+            return $this->getConnection()->transaction(function () use ($callback) {
+                $query = $this->newQueryWithoutScopes()->whereKey($this->getKey());
 
-            if ($feature !== null) {
-                $query->forFeature($feature);
-            } else {
-                $query->global();
-            }
+                if ($this->getConnection()->getDriverName() === 'sqlite') {
+                    // SQLite ignores FOR UPDATE. Acquire its write lock before
+                    // checking for bans, without changing timestamps or firing events.
+                    $key = $this->getKeyName();
+                    $query->toBase()->update([
+                        $key => $this->getConnection()->raw($this->getConnection()->getQueryGrammar()->wrap($key)),
+                    ]);
+                }
 
-            $query->get()->each(function (Ban $ban): void {
-                $ban->update(['status' => BanStatus::CANCELLED->value]);
-            });
+                $query->lockForUpdate()->firstOrFail();
 
-            $this->flushBanCache($feature);
-
-            event(new ModelUnbanned($this, $feature));
+                return $callback();
+            }, 3);
         } finally {
             unset(self::$executingBans[$lock]);
         }
     }
 
-    /**
-     * Check whether the model has an active global ban.
-     */
-    public function isBanned(): bool
+    private function banLockKey(): string
     {
-        return $this->cachedBanCheck(null, fn(): bool => $this->bans()
-            ->active()
-            ->global()
-            ->exists());
+        return hash('sha256', serialize([
+            $this->getConnection()->getName(),
+            $this->getConnection()->getDatabaseName(),
+            $this->getConnection()->getTablePrefix(),
+            $this->getTable(),
+            (string) $this->getKey(),
+        ]));
     }
 
-    /**
-     * Check whether the model is banned from a specific feature.
-     * A global ban also counts as a ban from any feature.
-     */
-    public function isBannedFrom(string $feature): bool
+    /** Dispatch only committed changes, retaining recursion protection in listeners. */
+    private function dispatchBanEvent(object $event): void
     {
-        return $this->cachedBanCheck($feature, fn(): bool => $this->bans()
-            ->active()
-            ->where(function ($query) use ($feature): void {
-                $query->whereNull('feature')
-                    ->orWhere('feature', $feature);
-            })
-            ->exists());
-    }
+        $lock = $this->banLockKey();
 
-    // -------------------------------------------------------------------------
-    // Cache Helpers
-    // -------------------------------------------------------------------------
+        $this->getConnection()->afterCommit(static function () use ($event, $lock): void {
+            $alreadyExecuting = isset(self::$executingBans[$lock]);
+            self::$executingBans[$lock] = true;
 
-    private function cachedBanCheck(?string $feature, \Closure $callback): bool
-    {
-        $ttl = (int)config('ban.cache_ttl', 3600);
-
-        if ($ttl <= 0) {
-            return $callback();
-        }
-
-        return $this->banCacheStore()->remember(
-            $this->buildCacheKey($feature),
-            $ttl,
-            $callback,
-        );
-    }
-
-    public function flushBanCache(?string $feature): void
-    {
-        $ttl = (int)config('ban.cache_ttl', 3600);
-
-        if ($ttl <= 0) {
-            return;
-        }
-
-        $store = $this->banCacheStore();
-
-        // Always flush the global key
-        $store->forget($this->buildCacheKey(null));
-
-        // Flush the feature-specific key if relevant
-        if ($feature !== null) {
-            $store->forget($this->buildCacheKey($feature));
-        }
-    }
-
-    private function buildCacheKey(?string $feature): string
-    {
-        $prefix = config('ban.cache_prefix', 'laravel_ban_');
-        $morphClass = str_replace('\\', '_', $this->getMorphClass());
-        $id = $this->getKey();
-        $scope = $feature ?? 'global';
-
-        return "{$prefix}{$morphClass}_{$id}_{$scope}";
-    }
-
-    private function banCacheStore(): Repository
-    {
-        $driver = config('ban.cache_driver');
-
-        /** @var CacheRepository */
-        return $driver !== null
-            ? Cache::store($driver)
-            : Cache::store();
+            try {
+                event($event);
+            } finally {
+                if (! $alreadyExecuting) {
+                    unset(self::$executingBans[$lock]);
+                }
+            }
+        });
     }
 }
-

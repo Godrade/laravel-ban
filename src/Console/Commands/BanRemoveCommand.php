@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Godrade\LaravelBan\Console\Commands;
 
 use Godrade\LaravelBan\Models\Ban;
-use Godrade\LaravelBan\Traits\HasBans;
 use Illuminate\Console\Command;
 
 final class BanRemoveCommand extends Command
@@ -25,11 +24,12 @@ final class BanRemoveCommand extends Command
 
     public function handle(): int
     {
-        $id  = $this->argument('id');
+        $id = $this->argument('id');
         $ban = Ban::withTrashed()->find($id);
 
         if ($ban === null) {
             $this->error("No ban record found with ID [{$id}].");
+
             return self::FAILURE;
         }
 
@@ -45,6 +45,7 @@ final class BanRemoveCommand extends Command
 
             if (! $confirmed) {
                 $this->line('<fg=yellow>Aborted.</>');
+
                 return self::SUCCESS;
             }
         }
@@ -57,9 +58,6 @@ final class BanRemoveCommand extends Command
             $this->info("Ban #{$ban->id} has been soft-deleted.");
         }
 
-        // Flush the ban cache for the affected model
-        $this->flushCacheForBan($ban);
-
         return self::SUCCESS;
     }
 
@@ -70,34 +68,12 @@ final class BanRemoveCommand extends Command
             [
                 ['ID',           $ban->id],
                 ['Bannable',     "{$ban->bannable_type} #{$ban->bannable_id}"],
-                ['Feature',      $ban->feature    ?? 'global'],
-                ['Reason',       $ban->reason     ?? '—'],
+                ['Feature',      $ban->feature ?? 'global'],
+                ['Reason',       $ban->reason ?? '—'],
                 ['Expires at',   $ban->expired_at?->toDateTimeString() ?? 'permanent'],
                 ['Created at',   $ban->created_at->toDateTimeString()],
                 ['Deleted at',   $ban->deleted_at?->toDateTimeString() ?? '—'],
             ],
         );
-    }
-
-    private function flushCacheForBan(Ban $ban): void
-    {
-        // Attempt to load the bannable model and flush its cache if it uses HasBans
-        try {
-            /** @var class-string $class */
-            $class = $ban->bannable_type;
-
-            if (! class_exists($class)) {
-                return;
-            }
-
-            if (! in_array(HasBans::class, class_uses_recursive($class), strict: true)) {
-                return;
-            }
-
-            $bannable = $class::find($ban->bannable_id);
-            $bannable?->flushBanCache($ban->feature); // flush cache without side effects
-        } catch (\Throwable) {
-            // Non-critical: cache will expire naturally
-        }
     }
 }

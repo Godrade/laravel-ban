@@ -1,0 +1,11 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+    - vendor/nesbot/carbon/extension.neon
+
+parameters:
+    level: 5
+    paths:
+        - src
+        - tests/Support/AnalysisBannable.php
+        - tests/Support/AnalysisComponent.php
+    tmpDir: build/phpstan
